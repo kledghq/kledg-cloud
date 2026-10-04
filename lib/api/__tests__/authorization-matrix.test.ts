@@ -351,6 +351,8 @@ const ROUTE_MODULES = {
   dashboardWidgets: () => import('@/app/api/dashboard/widgets/route'),
   dashboardLayout: () => import('@/app/api/dashboard/layout/route'),
   appearance: () => import('@/app/api/account/appearance/route'),
+  displayMode: () => import('@/app/api/account/display-mode/route'),
+  simpleCounts: () => import('@/app/api/companies/[id]/simple/counts/route'),
   importFile: () => import('@/app/api/import/route'),
   importPreview: () => import('@/app/api/import/preview-fiscal-years/route'),
   establishment: () => import('@/app/api/companies/[id]/establishments/[establishmentId]/route'),
@@ -457,6 +459,12 @@ const ROUTE_MODULES = {
   budgetLine: () => import('@/app/api/budget-lines/[id]/route'),
   feeConventions: () => import('@/app/api/management-fees/conventions/route'),
   subscriptions: () => import('@/app/api/subscriptions/route'),
+  simpleExpenses: () => import('@/app/api/simple/expenses/route'),
+  simpleConfirm: () => import('@/app/api/simple/expenses/[id]/confirm/route'),
+  simpleConfirmAll: () => import('@/app/api/simple/expenses/confirm-all/route'),
+  simpleReceipt: () => import('@/app/api/simple/expenses/[id]/receipt/route'),
+  simpleEntries: () => import('@/app/api/simple/entries/route'),
+  simpleSettings: () => import('@/app/api/companies/[id]/simple-mode-settings/route'),
   subscriptionDecision: () => import('@/app/api/subscriptions/decision/route'),
   subscriptionBudgetItem: () => import('@/app/api/subscriptions/budget-item/route'),
   feeConvention: () => import('@/app/api/management-fees/conventions/[id]/route'),
@@ -649,6 +657,10 @@ const WRITES: Call[] = [
   { label: 'create budget line', route: 'budgetLines', method: 'POST', path: () => `/api/budgets/${ids.aBudget}/lines`, params: p({ id: () => ids.aBudget }), body: () => ({ accountPrefix: '6064' }) },
   { label: 'update budget line', route: 'budgetLine', method: 'PATCH', path: () => `/api/budget-lines/${ids.aBudgetLine}`, params: p({ id: () => ids.aBudgetLine }), body: () => ({ amounts: [{ month: '2026-02', amountCents: 5_000 }] }) },
   { label: 'delete budget line', route: 'budgetLine', method: 'DELETE', path: () => `/api/budget-lines/${ids.aBudgetLine}`, params: p({ id: () => ids.aBudgetLine }) },
+  { label: 'confirm a simple mode expense', route: 'simpleConfirm', method: 'POST', path: () => `/api/simple/expenses/${ids.aTransaction}/confirm`, params: p({ id: () => ids.aTransaction }), body: () => ({ categoryId: 'paiement-client' }) },
+  { label: 'confirm simple mode expenses in bulk', route: 'simpleConfirmAll', method: 'POST', path: () => '/api/simple/expenses/confirm-all', body: () => ({ companyId: A(), transactionIds: [ids.aTransaction] }) },
+  { label: 'send a simple mode receipt', route: 'simpleReceipt', method: 'POST', path: () => `/api/simple/expenses/${ids.aTransaction}/receipt`, params: p({ id: () => ids.aTransaction }), form: () => ({ note: 'sans fichier' }) },
+  { label: 'update simple mode settings', route: 'simpleSettings', method: 'PUT', path: () => `/api/companies/${A()}/simple-mode-settings`, params: p({ id: A }), body: () => ({ accountantReview: true }) },
   { label: 'decide on a subscription', route: 'subscriptionDecision', method: 'PUT', path: () => '/api/subscriptions/decision', body: () => ({ companyId: A(), subscriptionId: ids.aSubscription, status: 'ignored' }) },
   { label: 'add a subscription to the budget', route: 'subscriptionBudgetItem', method: 'POST', path: () => '/api/subscriptions/budget-item', body: () => ({ companyId: A(), subscriptionId: ids.aSubscription, budgetLineId: ids.aChargesLine }) },
   { label: 'create management fee convention', route: 'feeConventions', method: 'POST', path: () => '/api/management-fees/conventions', body: () => ({ companyId: A(), label: 'Convention', startDate: '2026-01-01', subsidiaries: [] }) },
@@ -711,6 +723,7 @@ const READS: Call[] = [
   { label: 'search addresses', route: 'addresses', method: 'GET', path: () => `/api/addresses?companyId=${A()}&search=Paris` },
   { label: 'get address', route: 'address', method: 'GET', path: () => `/api/addresses/${ids.aAddress}?companyId=${A()}`, params: p({ id: () => ids.aAddress }) },
   { label: 'tasks count', route: 'tasksCount', method: 'GET', path: () => `/api/tasks/count?companyId=${A()}` },
+  { label: 'simple navigation counts', route: 'simpleCounts', method: 'GET', path: () => `/api/companies/${A()}/simple/counts`, params: p({ id: A }) },
   { label: 'dashboard widget data', route: 'dashboardWidgets', method: 'GET', path: () => `/api/dashboard/widgets?companyId=${A()}&source=ledger&fiscalYearId=${ids.aFy}` },
   { label: 'dashboard bank accounts widget', route: 'dashboardWidgets', method: 'GET', path: () => `/api/dashboard/widgets?companyId=${A()}&source=bank-accounts` },
   { label: 'own dashboard layout', route: 'dashboardLayout', method: 'GET', path: () => `/api/dashboard/layout?companyId=${A()}` },
@@ -744,6 +757,9 @@ const READS: Call[] = [
   { label: 'list budgets', route: 'budgets', method: 'GET', path: () => `/api/budgets?companyId=${A()}` },
   { label: 'read budget', route: 'budget', method: 'GET', path: () => `/api/budgets/${ids.aBudget}`, params: p({ id: () => ids.aBudget }) },
   { label: 'budget against the books', route: 'budgetReport', method: 'GET', path: () => `/api/budgets/${ids.aBudget}/report`, params: p({ id: () => ids.aBudget }) },
+  { label: 'list simple mode expenses', route: 'simpleExpenses', method: 'GET', path: () => `/api/simple/expenses?companyId=${A()}` },
+  { label: 'list simple mode entries', route: 'simpleEntries', method: 'GET', path: () => `/api/simple/entries?companyId=${A()}` },
+  { label: 'read simple mode settings', route: 'simpleSettings', method: 'GET', path: () => `/api/companies/${A()}/simple-mode-settings`, params: p({ id: A }) },
   { label: 'list detected subscriptions', route: 'subscriptions', method: 'GET', path: () => `/api/subscriptions?companyId=${A()}` },
   { label: 'list management fee conventions', route: 'feeConventions', method: 'GET', path: () => `/api/management-fees/conventions?companyId=${A()}` },
   { label: 'read management fee convention', route: 'feeConvention', method: 'GET', path: () => `/api/management-fees/conventions/${ids.aFeeConvention}`, params: p({ id: () => ids.aFeeConvention }) },
@@ -792,6 +808,7 @@ const ACCOUNTANT_FORBIDDEN = new Set([
   'update payment terms',
   'update deadline settings',
   'update VAT settings',
+  'update simple mode settings',
 ])
 
 describe.skipIf(!available)('authorization matrix', () => {
@@ -1057,6 +1074,37 @@ describe.skipIf(!available)('authorization matrix', () => {
       expect((await call('accountant', appearance('PUT', { palette: 'neon' }))).status).toBe(400)
       expect((await read('viewer')).appearance.palette).toBe('custom')
       expect(await prisma.userPreference.count({ where: { userId: 'u-accountant' } })).toBe(0)
+    })
+  })
+
+  describe('own display mode (any signed-in user, no company)', () => {
+    beforeAll(reseed)
+    const displayMode = (method: 'GET' | 'PUT', body?: unknown): Call => ({
+      label: `display mode ${method}`,
+      route: 'displayMode',
+      method,
+      path: () => '/api/account/display-mode',
+      ...(body === undefined ? {} : { body: () => body }),
+    })
+    const read = async (who: Who) => (await (await call(who, displayMode('GET'))).json()) as { mode: string; chosen: boolean }
+
+    it('anonymous: 401 on read and write', async () => {
+      expect((await call('anonymous', displayMode('GET'))).status).toBe(401)
+      expect((await call('anonymous', displayMode('PUT', { mode: 'simple' }))).status).toBe(401)
+    })
+
+    it('every role chooses its own mode, a viewer included (a display preference, it grants nothing)', async () => {
+      for (const who of ['viewer', 'accountant', 'companyAdmin', 'memberB', 'admin'] as const) {
+        expect((await call(who, displayMode('PUT', { mode: 'simple' }))).status, who).toBe(200)
+        expect(await read(who), who).toEqual({ mode: 'simple', chosen: true })
+      }
+      // The simple mode changes no permission: a viewer in simple mode is refused every write
+      for (const c of WRITES) expect((await call('viewer', c)).status, c.label).toBe(403)
+    })
+
+    it('cannot write for another user', async () => {
+      expect((await call('accountant', displayMode('PUT', { mode: 'expert', userId: 'u-viewer' }))).status).toBe(400)
+      expect((await read('viewer')).mode).toBe('simple')
     })
   })
 

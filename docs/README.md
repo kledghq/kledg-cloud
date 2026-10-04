@@ -12,6 +12,7 @@
 - [Lettrage et tiers](lettrage-et-tiers.md) : lettrage des comptes de tiers, balance auxiliaire, balance âgée, justificatifs manquants
 - [Factures et tiers](factures-et-tiers.md) : clients et fournisseurs, factures d'achat et de vente, comptabilisation, TVA sur les encaissements, règlements, import Qonto, facturation électronique
 - [Notes de frais](notes-de-frais.md) : bénéficiaires, TVA récupérable, indemnités kilométriques, validation, comptabilisation et remboursement
+- [Catégories simples](categories-simples.md) : mode simple, catégories en langage courant et leurs comptes, TVA récupérable, questions, dépenses à vérifier, règles apprises, validation par l'expert-comptable
 - [Abonnements](abonnements.md) : paiements récurrents détectés dans les opérations bancaires, rythme, coût annuel, prix modifié ou arrêt, ajout au budget
 - [Indicateurs financiers](indicateurs-financiers.md) : soldes intermédiaires de gestion, capacité d'autofinancement, besoin en fonds de roulement, trésorerie nette, délais de paiement et ratios, avec leurs comptes et les lignes des formulaires
 - [Budget](budget.md) : budget de l'exercice par compte et par mois, éléments récurrents, comparaison avec les écritures validées
@@ -20,5 +21,6 @@
 - [Frais de gestion](frais-de-gestion.md) : conventions d'une holding avec ses filiales, coûts majorés d'une marge, clés de répartition, factures de vente et factures d'achat proposées
 - [Vue groupe](vue-groupe.md) : vue combinée d'une holding et de ses filiales, flux intragroupe et éliminations indicatives, trésorerie du groupe, tableau des filiales et participations
 - [Tableau de bord](tableau-de-bord.md) : widgets, sources de données, dispositions par défaut et personnalisation
+- [Mode simple](mode-simple.md) : affichage simple ou expert par utilisateur, navigation et accueil du mode simple, vocabulaire sans jargon
 
 La documentation utilisateur (prise en main, import FEC, banque, clôture) est publiée sur [kledg.com](https://www.kledg.com).

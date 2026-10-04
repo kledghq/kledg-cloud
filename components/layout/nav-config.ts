@@ -1,5 +1,8 @@
 import {
+  ArrowDownLeft,
   ArrowLeftRight,
+  ArrowUpRight,
+  BadgeCheck,
   BookMarked,
   BookOpen,
   BookText,
@@ -17,6 +20,7 @@ import {
   Gauge,
   HandCoins,
   Hourglass,
+  House,
   Info,
   Landmark,
   LayoutDashboard,
@@ -38,11 +42,13 @@ import {
   Target,
   TrendingDown,
   Upload,
+  UserRound,
   Users,
   Wallet,
   Workflow,
   type LucideIcon,
 } from "lucide-react"
+import type { DisplayMode } from "@/lib/appearance/display-mode"
 
 export interface NavItem {
   title: string
@@ -50,7 +56,12 @@ export interface NavItem {
   icon: LucideIcon
   /** Shown only in a holding: a company recorded as shareholder of another company (lib/management-fees/holding.ts): Frais de gestion, Vue groupe. */
   holdingOnly?: boolean
+  /** A count shown next to the entry (simple mode, NavCounts of nav-main.tsx). */
+  count?: NavCountKey
 }
+
+/** Counts the simple navigation shows next to an entry. */
+export type NavCountKey = "expensesToCheck"
 
 export interface NavGroup {
   /** Group heading. Omitted for the top group (dashboard). */
@@ -92,6 +103,7 @@ export const navGroups: NavGroup[] = [
     label: "Saisie",
     items: [
       { title: "Écritures", url: "/entries", icon: FileText },
+      { title: "Saisies du mode simple", url: "/entries/simple-mode", icon: BadgeCheck },
       { title: "Comptes", url: "/accounts", icon: FolderSearch },
       { title: "Lettrage", url: "/lettering", icon: Link2 },
       { title: "Immobilisations", url: "/fixed-assets", icon: Package },
@@ -134,6 +146,36 @@ export const navGroups: NavGroup[] = [
 ]
 
 /**
+ * Navigation of the simple mode (docs/mode-simple.md): the words of someone
+ * who does not keep books. Entries open the existing pages where they fit;
+ * expert pages stay reachable by URL (the mode changes no permission), they
+ * are only not listed here.
+ * - Accueil, Dépenses: the simple pages (app/(company)/[companyId]/simple).
+ * - Recettes: the sales invoices (what customers owe and paid).
+ * - Factures: the purchase invoices (the bills received).
+ * - Banque: the bank accounts; Justificatifs: the missing receipts.
+ * - Mon comptable: the members of the company, where the accountant is.
+ */
+export const simpleNavGroups: NavGroup[] = [
+  {
+    items: [
+      { title: "Accueil", url: "/simple", icon: House },
+      { title: "Dépenses", url: "/simple/depenses", icon: ArrowUpRight, count: "expensesToCheck" },
+      { title: "Recettes", url: "/invoices/sales", icon: ArrowDownLeft },
+      { title: "Factures", url: "/invoices/purchases", icon: FileInput },
+      { title: "Banque", url: "/banking", icon: Landmark },
+      { title: "Justificatifs", url: "/banking/missing-receipts", icon: Receipt },
+      { title: "Mon comptable", url: "/members", icon: UserRound },
+    ],
+  },
+]
+
+/** The navigation of a display mode. */
+export function navGroupsFor(mode: DisplayMode): NavGroup[] {
+  return mode === "simple" ? simpleNavGroups : navGroups
+}
+
+/**
  * Pages reached from another page rather than from the sidebar. Without a
  * title here they would borrow the title of their nav entry ("Comptes
  * bancaires" on "Connecter une banque") and the breadcrumb would say
@@ -148,6 +190,7 @@ const subPages: Array<{ path: string; title: string }> = [
   { path: "/reports/income-statement/config", title: "Configuration du compte de résultat" },
   { path: "/entries/new", title: "Nouvelle écriture" },
   { path: "/entries/[id]/edit", title: "Modifier l'écriture" },
+  { path: "/simple/depenses", title: "Dépenses à vérifier" },
   { path: "/entries/[id]", title: "Écriture" },
   { path: "/fiscal-years/opening-balances", title: "Bilan d'ouverture" },
   { path: "/invoices/new", title: "Nouvelle facture" },
@@ -179,10 +222,10 @@ export function findSubPageTitle(relativePath: string): { title: string } | null
   return page ? { title: page.title } : null
 }
 
-/** Finds the nav entry matching a company-relative path (longest prefix wins). */
-export function findNavEntry(relativePath: string) {
+/** Finds the nav entry matching a company-relative path (longest prefix wins), in the navigation given (expert by default). */
+export function findNavEntry(relativePath: string, groups: readonly NavGroup[] = navGroups) {
   let best: { group: string; title: string; url: string } | null = null
-  for (const group of navGroups) {
+  for (const group of groups) {
     for (const item of group.items) {
       const match =
         item.url === '/'
