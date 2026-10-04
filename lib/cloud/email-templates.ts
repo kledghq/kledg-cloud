@@ -52,31 +52,57 @@ export function accountExistsEmail(to: string, loginUrl: string): EmailMessage {
   )
 }
 
-
 export function deletionScheduledEmail(to: string, scheduledFor: Date, pageUrl: string): EmailMessage {
   return message(
     to,
     `Suppression de votre compte ${APP_NAME} programmée`,
     'Suppression de votre compte programmée',
     [
-      `Votre compte sera supprimé le ${frenchDay(scheduledFor)}. Jusqu'à cette date, vous pouvez annuler la suppression et exporter vos données depuis la page Données et compte.`,
+      `Votre compte et les données de vos sociétés, livres comptables compris, seront supprimés le ${frenchDay(scheduledFor)}. D'ici là, votre compte est en lecture seule : vous pouvez annuler la suppression et exporter vos données (FEC et export complet) depuis la page Données et compte.`,
       "Si vous n'êtes pas à l'origine de cette demande, connectez-vous et annulez-la, puis changez votre mot de passe.",
     ],
     { label: 'Annuler ou exporter mes données', url: pageUrl },
   )
 }
 
-export function accountDeletedEmail(to: string, keptCompanies: string[], legalUrl: string): EmailMessage {
-  const kept = keptCompanies.length
-    ? [
-        `Les livres comptables de ${keptCompanies.join(', ')} sont conservés, archivés et inaccessibles, jusqu'à la fin de la durée légale de conservation (10 ans, Code de commerce art. L123-22), puis supprimés.`,
-      ]
-    : []
+export function accountDeletedEmail(to: string, privacyUrl: string): EmailMessage {
   return message(
     to,
     `Votre compte ${APP_NAME} a été supprimé`,
     'Votre compte a été supprimé',
-    [`Votre compte ${APP_NAME} et ses données personnelles ont été supprimés, et votre abonnement résilié.`, ...kept],
-    { label: 'Notre politique de confidentialité', url: legalUrl },
+    [
+      `Votre compte ${APP_NAME}, ses données personnelles et les données de vos sociétés ont été supprimés, et votre abonnement résilié.`,
+      'Nous conservons uniquement les documents que la loi nous impose de garder, comme nos factures.',
+    ],
+    { label: 'Notre politique de confidentialité', url: privacyUrl },
+  )
+}
+
+/** CGV art. 12: the date of an annual renewal, at least a month before it. */
+export function renewalReminderEmail(to: string, renewal: Date, planName: string, pageUrl: string): EmailMessage {
+  return message(
+    to,
+    `Renouvellement de votre abonnement ${APP_NAME} le ${frenchDay(renewal)}`,
+    'Renouvellement de votre abonnement annuel',
+    [
+      `Votre abonnement annuel ${APP_NAME} (offre ${planName}) sera renouvelé le ${frenchDay(renewal)} pour une nouvelle année.`,
+      "Pour changer d'offre ou ne pas le renouveler, rendez-vous sur la page Facturation avant cette date.",
+    ],
+    { label: 'Gérer mon abonnement', url: pageUrl },
+  )
+}
+
+/** CGV art. 14: the end of the contract, the read-only retrieval period and the deletion date. */
+export function contractEndedEmail(to: string, ended: Date, retrievalEnds: Date, pageUrl: string): EmailMessage {
+  return message(
+    to,
+    `Votre abonnement ${APP_NAME} a pris fin`,
+    'Votre abonnement a pris fin',
+    [
+      `Votre abonnement ${APP_NAME} a pris fin le ${frenchDay(ended)}. Votre compte est en lecture seule : vous pouvez consulter et exporter vos données (FEC de chaque exercice et export complet) jusqu'au ${frenchDay(retrievalEnds)}.`,
+      `À cette date, votre compte et les données de vos sociétés, livres comptables compris, seront supprimés définitivement. Votre société doit conserver ses livres 10 ans (Code de commerce art. L123-22) : exportez-les avant le ${frenchDay(retrievalEnds)}.`,
+      'Pour conserver votre compte, choisissez une offre avant cette date.',
+    ],
+    { label: 'Exporter mes données', url: pageUrl },
   )
 }

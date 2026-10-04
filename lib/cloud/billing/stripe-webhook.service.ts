@@ -21,8 +21,9 @@ import { Prisma, type CloudBillingAccount } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { ExternalServiceError, ValidationError } from '@/lib/accounting/errors'
 import { logger } from '@/lib/logger'
-import { planOfPrice } from './plans'
+import { isPlanId, isProductKind, lookupKey, PRODUCT_KINDS, type PlanId, type ProductKind } from './plans'
 import { getStripe, stripeWebhooks, stripeWebhookSecret } from './stripe'
+import { hasLiveSubscription } from './state'
 
 export const HANDLED_EVENT_TYPES = [
   'checkout.session.completed',
@@ -46,19 +47,39 @@ const idOf = (value: string | { id: string } | null | undefined): string | null 
 
 const fromUnix = (seconds: number | null | undefined): Date | null => (seconds ? new Date(seconds * 1000) : null)
 
-/** The billing fields mirrored from a subscription as Stripe holds it. */
+/**
+ * What a subscription item is: the `kledg_plan` metadata of its product
+ * (stable across price changes), else the lookup key of its price.
+ */
+export function itemKind(item: Stripe.SubscriptionItem): ProductKind | null {
+  const product = item.price.product
+  if (product && typeof product === 'object' && !('deleted' in product && product.deleted)) {
+    const kind = (product as Stripe.Product).metadata?.kledg_plan
+    if (isProductKind(kind)) return kind
+  }
+  const key = item.price.lookup_key
+  return PRODUCT_KINDS.find((kind) => key === lookupKey(kind, 'month') || key === lookupKey(kind, 'year')) ?? null
+}
+
+/** The billing fields mirrored from a subscription as Stripe holds it (items expanded with their product). */
 export function subscriptionFields(subscription: Stripe.Subscription) {
-  const item = subscription.items.data[0]
-  const priceId = item?.price.id ?? null
+  const items = subscription.items.data
+  const base = items.find((item) => isPlanId(itemKind(item)))
+  const extra = items.find((item) => itemKind(item) === 'cabinet_extra_company')
+  const interval = base?.price.recurring?.interval
   return {
     stripeSubscriptionId: subscription.id,
     subscriptionStatus: subscription.status,
-    priceId,
-    planId: planOfPrice(priceId),
+    planId: base ? (itemKind(base) as PlanId) : null,
+    priceId: base?.price.id ?? null,
+    billingInterval: interval === 'month' || interval === 'year' ? interval : null,
+    trialEnd: fromUnix(subscription.trial_end),
     // Since API 2025-03-31 the billing period is carried by the items.
-    currentPeriodEnd: fromUnix(item?.current_period_end),
+    currentPeriodEnd: fromUnix((base ?? items[0])?.current_period_end),
     cancelAtPeriodEnd: subscription.cancel_at_period_end || subscription.cancel_at !== null,
     subscriptionEndedAt: fromUnix(subscription.ended_at),
+    extraCompanies: extra?.quantity ?? 0,
+    dedicatedDatabase: items.some((item) => itemKind(item) === 'dedicated_database'),
   }
 }
 
@@ -134,7 +155,7 @@ async function resolveTarget(event: Stripe.Event, stripe: Stripe): Promise<Targe
     logger.warn('Stripe event for a customer without a billing account', { eventId: event.id, type: event.type })
     return { status: 'ignored', reason: 'unknown_customer' }
   }
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price.product'] })
   // An old subscription ending must not replace the one the account pays now.
   if (account.stripeSubscriptionId && account.stripeSubscriptionId !== subscription.id && ENDED.has(subscription.status)) {
     return { status: 'ignored', reason: 'stale_subscription' }
@@ -159,11 +180,16 @@ export async function applyStripeEvent(event: Stripe.Event, stripe: Stripe = get
     const customerId = idOf(subscription.customer)
     const paymentIssue = PAYMENT_ISSUE.has(subscription.status)
     const eventAt = fromUnix(event.created) ?? now
+    // A client who subscribes again during the retrieval period keeps everything.
+    const comeback = hasLiveSubscription(subscription.status) && account.deletionReason === 'contract_ended'
     await tx.cloudBillingAccount.update({
       where: { id: account.id },
       data: {
         ...fields,
         ...(customerId && !account.stripeCustomerId ? { stripeCustomerId: customerId } : {}),
+        // One free trial per client (CGV art. 5).
+        ...(subscription.trial_start ? { trialUsed: true } : {}),
+        ...(comeback ? { deletionScheduledFor: null, deletionReason: null, contractEndNoticeFor: null } : {}),
         // The first failure of an incident starts the grace period; a paid subscription clears it.
         paymentFailedAt: paymentIssue ? (account.paymentFailedAt ?? (event.type === 'invoice.payment_failed' ? eventAt : now)) : null,
         stripeSyncedAt: now,

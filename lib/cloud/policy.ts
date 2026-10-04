@@ -44,7 +44,7 @@ export const CLOUD_SELF_AUTHENTICATED_API_ROUTES: Readonly<Record<string, string
 }
 
 /** Pages of the hosted service that open without a session. */
-export const CLOUD_PUBLIC_PAGES: readonly string[] = [CLOUD_PATHS.signup, CLOUD_PATHS.legal]
+export const CLOUD_PUBLIC_PAGES: readonly string[] = [CLOUD_PATHS.signup]
 
 /** Rate limits of the hosted service's own routes (enforceRateLimit, lib/rate-limit.ts). */
 export const CLOUD_RATE_LIMITS = {

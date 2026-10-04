@@ -1,5 +1,5 @@
 -- Kledg Cloud only (kledghq/kledg-cloud, never in Kledg): billing accounts,
--- company ownership, retained books, Stripe event idempotency and terms
+-- company ownership, Stripe event idempotency and terms
 -- acceptances. Additive, no Kledg table is changed. See docs/cloud.md.
 
 -- CreateTable
@@ -11,15 +11,21 @@ CREATE TABLE "cloud_billing_accounts" (
     "subscriptionStatus" TEXT,
     "planId" TEXT,
     "priceId" TEXT,
-    "trialEndsAt" TIMESTAMP(3) NOT NULL,
+    "billingInterval" TEXT,
+    "trialEnd" TIMESTAMP(3),
+    "trialUsed" BOOLEAN NOT NULL DEFAULT false,
     "currentPeriodEnd" TIMESTAMP(3),
     "cancelAtPeriodEnd" BOOLEAN NOT NULL DEFAULT false,
     "subscriptionEndedAt" TIMESTAMP(3),
     "paymentFailedAt" TIMESTAMP(3),
+    "extraCompanies" INTEGER NOT NULL DEFAULT 0,
+    "dedicatedDatabase" BOOLEAN NOT NULL DEFAULT false,
     "stripeSyncedAt" TIMESTAMP(3),
+    "renewalReminderFor" TIMESTAMP(3),
+    "contractEndNoticeFor" TIMESTAMP(3),
     "deletionRequestedAt" TIMESTAMP(3),
     "deletionScheduledFor" TIMESTAMP(3),
-    "deletionIncludesBooks" BOOLEAN NOT NULL DEFAULT false,
+    "deletionReason" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -33,15 +39,6 @@ CREATE TABLE "cloud_company_ownerships" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "cloud_company_ownerships_pkey" PRIMARY KEY ("companyId")
-);
-
--- CreateTable
-CREATE TABLE "cloud_retained_companies" (
-    "companyId" TEXT NOT NULL,
-    "retainUntil" TIMESTAMP(3) NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "cloud_retained_companies_pkey" PRIMARY KEY ("companyId")
 );
 
 -- CreateTable
@@ -77,10 +74,10 @@ CREATE UNIQUE INDEX "cloud_billing_accounts_stripeSubscriptionId_key" ON "cloud_
 CREATE INDEX "cloud_billing_accounts_deletionScheduledFor_idx" ON "cloud_billing_accounts"("deletionScheduledFor");
 
 -- CreateIndex
-CREATE INDEX "cloud_company_ownerships_billingAccountId_idx" ON "cloud_company_ownerships"("billingAccountId");
+CREATE INDEX "cloud_billing_accounts_subscriptionStatus_idx" ON "cloud_billing_accounts"("subscriptionStatus");
 
 -- CreateIndex
-CREATE INDEX "cloud_retained_companies_retainUntil_idx" ON "cloud_retained_companies"("retainUntil");
+CREATE INDEX "cloud_company_ownerships_billingAccountId_idx" ON "cloud_company_ownerships"("billingAccountId");
 
 -- CreateIndex
 CREATE INDEX "cloud_stripe_events_processedAt_idx" ON "cloud_stripe_events"("processedAt");

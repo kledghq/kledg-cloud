@@ -27,7 +27,7 @@ export default function SignupVerifiedPage() {
             </h1>
           </CardTitle>
           <CardDescription>
-            Votre compte est prêt et votre essai gratuit a commencé. Connectez-vous pour créer votre première société.
+            Votre compte est prêt. Connectez-vous, choisissez une offre pour démarrer votre essai gratuit de 30 jours, puis créez votre première société.
           </CardDescription>
         </CardHeader>
         <CardFooter>

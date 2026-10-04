@@ -2,8 +2,9 @@
  * Public sign-up of Kledg Cloud (POST /api/signup) against PostgreSQL,
  * through the real route, Better Auth and the policy in cloud mode; only
  * email delivery and waitUntil are replaced:
- * - a new address gets an unconfirmed account, its CGU/CGV acceptance with
- *   version and time, a trial, and a confirmation link; the account cannot
+ * - a new address gets an unconfirmed account, its CGV acceptance with
+ *   version and date, and a confirmation link (no trial yet: it starts at
+ *   Checkout, with a plan); the account cannot
  *   sign in until the link is followed;
  * - an address that has an account gets the very same answer, and an email
  *   saying so instead of a link: nothing tells them apart over HTTP;
@@ -69,7 +70,6 @@ async function settle() {
   await Promise.all(pending)
 }
 
-const DAY = 86_400_000
 
 describe.skipIf(!available)('public sign-up', () => {
   beforeAll(async () => {
@@ -97,7 +97,7 @@ describe.skipIf(!available)('public sign-up', () => {
     await prisma.user.create({ data: { id: 'u-operator', email: 'operator@test.local', name: 'Opérateur', role: 'admin', emailVerified: true } })
   })
 
-  it('creates an unconfirmed account with its terms acceptance and trial, and sends the confirmation link', async () => {
+  it('creates an unconfirmed account with its CGV acceptance (version 1.0 and date), and sends the confirmation link', async () => {
     const response = await signup(valid())
     expect(response.status).toBe(202)
     expect(await response.json()).toEqual({
@@ -112,14 +112,12 @@ describe.skipIf(!available)('public sign-up', () => {
     expect(user.accounts[0].password).not.toContain('un-mot-de-passe-solide')
 
     const acceptances = await prisma.cloudTermsAcceptance.findMany({ where: { userId: user.id }, orderBy: { document: 'asc' } })
-    expect(acceptances.map((a) => [a.document, a.version])).toEqual([
-      ['cgu', CURRENT_TERMS.cgu],
-      ['cgv', CURRENT_TERMS.cgv],
-    ])
+    expect(acceptances.map((a) => [a.document, a.version])).toEqual([['cgv', '1.0']])
+    expect(CURRENT_TERMS.cgv).toEqual({ version: '1.0', effective: '2026-10-04' })
     expect(Math.abs(acceptances[0].acceptedAt.getTime() - Date.now())).toBeLessThan(60_000)
 
-    const account = await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { ownerUserId: user.id } })
-    expect(Math.round((account.trialEndsAt.getTime() - Date.now()) / DAY)).toBe(30)
+    // No billing account yet: the trial starts when a plan is chosen.
+    expect(await prisma.cloudBillingAccount.count({ where: { ownerUserId: user.id } })).toBe(0)
 
     expect(state.emails.map((e) => [e.to, e.subject])).toEqual([['claire.martin@example.test', 'Confirmez votre adresse email Kledg']])
     expect(state.emails[0].text).toMatch(/http:\/\/localhost:3000\/api\/auth\/verify-email\?token=[^&\s]+&callbackURL=%2Fsignup%2Fverified/)
@@ -173,7 +171,7 @@ describe.skipIf(!available)('public sign-up', () => {
       [valid({ acceptTerms: false }), 400, 'acceptTerms: Acceptez les conditions générales pour créer un compte.'],
       [valid({ password: 'court' }), 400, 'password: Le mot de passe doit compter au moins 10 caractères.'],
       [valid({ email: 'pas-une-adresse' }), 400, 'email: Adresse email invalide.'],
-      [valid({ termsVersion: 'cgu:2020-01-01,cgv:2020-01-01' }), 409, 'Les conditions générales ont changé entre-temps. Rechargez la page pour lire la nouvelle version.'],
+      [valid({ termsVersion: 'cgv:0.9' }), 409, 'Les conditions générales ont changé entre-temps. Rechargez la page pour lire la nouvelle version.'],
     ]
     for (const [body, status, error] of cases) {
       const response = await signup(body)

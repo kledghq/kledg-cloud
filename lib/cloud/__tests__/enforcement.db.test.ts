@@ -1,14 +1,16 @@
 /**
- * Quota and read-only enforcement of Kledg Cloud through Kledg's own routes
- * and the instance policy (lib/cloud/enforcement.ts), against PostgreSQL:
- * - users create companies within their trial or plan; the creator owns
- *   them and becomes their administrator; one more is refused in French
- *   with a link to the plans; archived companies do not count;
- * - a read-only account (trial and grace over, payment failed past the
- *   grace) can create nothing and its companies refuse every write (409),
- *   for every member, while reads keep working;
- * - the operator (instance administrator) and the companies it created are
- *   never restricted;
+ * Plan limits and read-only accounts of Kledg Cloud through Kledg's own
+ * routes and the instance policy (lib/cloud/enforcement.ts), against
+ * PostgreSQL, Stripe mocked:
+ * - without a subscription a user creates nothing and is sent to the plans
+ *   (the trial starts at Checkout);
+ * - in trial or subscribed, companies within the plan: the creator owns
+ *   them and administers them; one more is refused in French with a link;
+ *   archived companies do not count; Cabinet bills each company beyond 25;
+ * - a read-only account (14 days after a failed payment, contract ended,
+ *   deletion requested) creates nothing and its companies refuse every
+ *   write (409) for every member, while reads keep working;
+ * - the operator and the companies it created are never restricted;
  * - outside cloud mode everything is Kledg's own behaviour.
  *
  * Skipped when the test database server is unreachable.
@@ -23,13 +25,19 @@ const state = await vi.hoisted(async () => {
   process.env.BETTER_AUTH_SECRET ??= 'kledg-test-secret-0123456789abcdef0123456789'
   process.env.BETTER_AUTH_URL ??= 'http://localhost:3000'
   process.env.RATE_LIMIT_DISABLED = 'true'
-  return { user: null as null | { id: string; email: string; name: string | null; role: string | null } }
+  return { user: null as null | { id: string; email: string; name: string | null; role: string | null }, stripe: null as unknown }
 })
 
 vi.mock('@/lib/session', () => ({ getCurrentUser: async () => state.user }))
+vi.mock('@/lib/cloud/billing/stripe', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/cloud/billing/stripe')>()
+  return { ...real, getStripe: () => state.stripe }
+})
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
 import type { CreateCompanyInput } from '@/lib/companies/company-wizard'
+import { clearPriceCache } from '@/lib/cloud/billing/stripe-prices'
+import { form, pricesList, stripeFetch, subscriptionObject } from './helpers/stripe-fixtures'
 
 const available = await testDatabaseAvailable()
 
@@ -42,10 +50,12 @@ const USERS = {
   admin: { id: 'u-admin', email: 'admin@test.local', name: 'Opérateur', role: 'admin' },
   owner: { id: 'u-owner', email: 'owner@test.local', name: 'Claire', role: 'user' },
   member: { id: 'u-member', email: 'member@test.local', name: 'Comptable', role: 'user' },
+  cabinet: { id: 'u-cabinet', email: 'cabinet@test.local', name: 'Cabinet', role: 'user' },
 } as const
 type Who = keyof typeof USERS
 
-const SIRENS = ['912345600', '912345618', '912345626', '912345634', '912345642', '912345659', '912345667', '912345675', '912345683', '912345691']
+// Luhn-valid SIRENs (912345600 + 8k + ...).
+const SIRENS = ['912345600', '912345618', '912345626', '912345634', '912345642', '912345659', '912345667', '912345675', '912345683', '912345691', '912345709', '912345717']
 let next = 0
 const company = (name: string): CreateCompanyInput => ({
   name,
@@ -76,6 +86,7 @@ async function companyCall(who: Who, method: 'GET' | 'PATCH', id: string, body?:
 
 const json = async (response: Response) => (await response.json()) as Record<string, unknown> & { id: string; error: string }
 const DAY = 86_400_000
+const setOwner = (data: Record<string, unknown>) => prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data })
 
 describe.skipIf(!available)('Kledg Cloud enforcement', () => {
   beforeAll(async () => {
@@ -95,7 +106,6 @@ describe.skipIf(!available)('Kledg Cloud enforcement', () => {
 
   beforeEach(() => {
     vi.stubEnv('KLEDG_CLOUD_MODE', 'true')
-    vi.stubEnv('KLEDG_CLOUD_TRIAL_COMPANIES', '2')
   })
 
   it('outside cloud mode, keeps company creation to the instance administrators', async () => {
@@ -103,114 +113,130 @@ describe.skipIf(!available)('Kledg Cloud enforcement', () => {
     const response = await create('owner', 'Refusée hors cloud')
     expect(response.status).toBe(403)
     expect((await json(response)).error).toBe("La création de sociétés est réservée aux administrateurs de l'instance.")
+  })
+
+  it('sends a user without a subscription to the plans: the trial starts at Checkout', async () => {
+    const response = await create('owner', 'Sans offre')
+    expect(response.status).toBe(403)
+    expect(await json(response)).toEqual({
+      error:
+        "Choisissez une offre pour créer votre première société : l'essai gratuit de 30 jours démarre sans carte bancaire et ne se transforme pas en abonnement payant sans votre accord.",
+      link: { label: 'Choisir une offre', href: '/settings/billing' },
+    })
     expect(await prisma.cloudBillingAccount.count()).toBe(0)
   })
 
-  it('lets a user create companies within the trial: they own them and administer them', async () => {
+  it('lets a user in trial create companies within the plan tried: they own and administer them', async () => {
+    await prisma.cloudBillingAccount.create({
+      data: { ownerUserId: 'u-owner', subscriptionStatus: 'trialing', planId: 'essentiel', trialEnd: new Date(Date.now() + 20 * DAY), trialUsed: true },
+    })
     const first = await create('owner', 'Atelier Lumen')
     expect(first.status).toBe(201)
     const { id } = await json(first)
     const account = await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { ownerUserId: 'u-owner' }, include: { companies: true } })
     expect(account.companies.map((c) => c.companyId)).toEqual([id])
-    // The trial started with the first company (30 days by default).
-    expect(Math.round((account.trialEndsAt.getTime() - Date.now()) / DAY)).toBe(30)
     expect(await prisma.member.findMany({ where: { organization: { companyId: id } }, select: { userId: true, role: true } })).toEqual([
       { userId: 'u-owner', role: 'companyAdmin' },
     ])
-    expect((await create('owner', 'Lumen Holding')).status).toBe(201)
-  })
 
-  it('refuses one company more than the trial allows, in French with a link to the plans', async () => {
-    const refused = await create('owner', 'Troisième')
+    const refused = await create('owner', 'Deuxième')
     expect(refused.status).toBe(403)
     expect(await json(refused)).toEqual({
-      error: "Pendant l'essai gratuit, vous pouvez créer 2 sociétés : vous en avez déjà 2. Choisissez une offre plus large pour créer une nouvelle société.",
+      error: "Votre essai de l'offre Essentiel permet 1 société : vous en avez déjà 1. Passez à une offre plus large pour créer une nouvelle société.",
       link: { label: 'Voir les offres', href: '/settings/billing' },
     })
   })
 
   it('counts companies against the paid plan, archived ones excepted', async () => {
-    await prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data: { subscriptionStatus: 'active', planId: 'essentiel' } })
-    const refused = await create('owner', 'Au-delà de l’offre')
-    expect((await json(refused)).error).toBe(
-      'Votre offre Essentiel permet 1 société : vous en avez déjà 2. Choisissez une offre plus large pour créer une nouvelle société.',
-    )
-    await prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data: { planId: 'holding' } })
+    await setOwner({ subscriptionStatus: 'active', planId: 'holding' })
     expect((await create('owner', 'Filiale')).status).toBe(201)
-    const owned = await prisma.cloudCompanyOwnership.findMany({ select: { companyId: true } })
-    expect(owned).toHaveLength(3)
-    // Archived companies (read-only, hidden) do not count: back on Essentiel, one archived leaves room for none, two for one.
     const { countedCompanies } = await import('../billing/billing-account.service')
-    const accountId = (await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { ownerUserId: 'u-owner' } })).id
-    expect(await countedCompanies(accountId)).toBe(3)
-    await prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data: { planId: 'essentiel' } })
-    const archive = (count: number) =>
-      prisma.company.updateMany({ where: { id: { in: owned.slice(0, count).map((o) => o.companyId) } }, data: { archivedAt: new Date() } })
-    await archive(2)
-    expect(await countedCompanies(accountId)).toBe(1)
-    expect((await create('owner', 'Toujours au-delà')).status).toBe(403)
-    await prisma.company.updateMany({ where: { id: { in: owned.map((o) => o.companyId) } }, data: { archivedAt: null } })
-    await prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data: { planId: 'holding' } })
+    const account = await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { ownerUserId: 'u-owner' } })
+    expect(await countedCompanies(account.id)).toBe(2)
+    await setOwner({ planId: 'essentiel' })
+    expect((await create('owner', 'Au-delà')).status).toBe(403)
+    const owned = await prisma.cloudCompanyOwnership.findMany({ where: { billingAccountId: account.id } })
+    await prisma.company.update({ where: { id: owned[1].companyId }, data: { archivedAt: new Date() } })
+    expect(await countedCompanies(account.id)).toBe(1)
+    await prisma.company.update({ where: { id: owned[1].companyId }, data: { archivedAt: null } })
+    await setOwner({ planId: 'holding' })
+  })
+
+  it('bills each Cabinet company beyond the 25 included on the subscription', async () => {
+    const account = await prisma.cloudBillingAccount.create({
+      data: { ownerUserId: 'u-cabinet', subscriptionStatus: 'active', planId: 'cabinet', billingInterval: 'month', stripeSubscriptionId: 'sub_TestCabinet01' },
+    })
+    for (let i = 0; i < 25; i++) {
+      const c = await prisma.company.create({ data: { name: `Client ${i}`, slug: `client-${i}`, siren: String(200000000 + i) } })
+      await prisma.cloudCompanyOwnership.create({ data: { companyId: c.id, billingAccountId: account.id } })
+    }
+    clearPriceCache()
+    const api = stripeFetch({
+      'GET /v1/subscriptions/sub_TestCabinet01': subscriptionObject({ id: 'sub_TestCabinet01', customer: 'cus_TestCabinet01', status: 'active', plan: 'cabinet' }),
+      'GET /v1/prices': pricesList(),
+      'POST /v1/subscription_items': { id: 'si_TestExtra0001', object: 'subscription_item', quantity: 1 },
+    })
+    state.stripe = api.stripe
+    const created = await create('cabinet', 'Vingt-sixième')
+    expect(created.status).toBe(201)
+    const added = api.calls.find((c) => c.path === '/v1/subscription_items')
+    expect(form(added?.body ?? '')).toEqual({
+      subscription: 'sub_TestCabinet01',
+      price: 'price_TestCabinetExtraCompanyMonth',
+      quantity: '1',
+      proration_behavior: 'create_prorations',
+    })
+    expect((await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { id: account.id } })).extraCompanies).toBe(1)
   })
 
   describe('read-only account', () => {
     let ownedId: string
 
     beforeAll(async () => {
-      ownedId = (await prisma.cloudCompanyOwnership.findFirstOrThrow({ select: { companyId: true } })).companyId
+      const account = await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { ownerUserId: 'u-owner' } })
+      ownedId = (await prisma.cloudCompanyOwnership.findFirstOrThrow({ where: { billingAccountId: account.id } })).companyId
       const org = await prisma.organization.findUniqueOrThrow({ where: { companyId: ownedId } })
       await prisma.member.create({ data: { id: 'm-member', userId: 'u-member', organizationId: org.id, role: 'companyAdmin', createdAt: new Date() } })
     })
 
-    it('stays writable during the grace after a failed payment', async () => {
-      await prisma.cloudBillingAccount.update({
-        where: { ownerUserId: 'u-owner' },
-        data: { subscriptionStatus: 'past_due', paymentFailedAt: new Date(Date.now() - 3 * DAY) },
-      })
+    it('stays writable during the 14 days after a failed payment', async () => {
+      await setOwner({ subscriptionStatus: 'past_due', paymentFailedAt: new Date(Date.now() - 13 * DAY) })
       expect((await companyCall('owner', 'PATCH', ownedId, { phone: '0102030405' })).status).toBe(200)
     })
 
-    it('refuses writes to its companies for every member, keeps reads, and refuses new companies', async () => {
-      await prisma.cloudBillingAccount.update({
-        where: { ownerUserId: 'u-owner' },
-        data: { subscriptionStatus: 'past_due', paymentFailedAt: new Date(Date.now() - 15 * DAY) },
-      })
+    it('then refuses writes for every member, keeps reads, and refuses new companies', async () => {
+      await setOwner({ subscriptionStatus: 'past_due', paymentFailedAt: new Date(Date.now() - 15 * DAY) })
       for (const who of ['owner', 'member'] as const) {
         const write = await companyCall(who, 'PATCH', ownedId, { phone: '0999999999' })
         expect(write.status).toBe(409)
         expect(await json(write)).toEqual({
           error:
-            "Cette société est en lecture seule : le paiement de l'abonnement de son titulaire a échoué. Ses données restent consultables et exportables (FEC, export complet). Le titulaire du compte peut choisir une offre depuis sa page Facturation.",
+            "Cette société est en lecture seule : le paiement de l'abonnement de son titulaire a échoué. Ses données restent consultables et exportables (FEC, export complet). Le titulaire du compte peut rétablir l'accès depuis sa page Facturation.",
           link: { label: 'Voir les offres', href: '/settings/billing' },
         })
       }
       const read = await companyCall('member', 'GET', ownedId)
       expect(read.status).toBe(200)
       expect((await json(read)).phone).toBe('0102030405')
-
-      // The MCP tools check writes through the same function.
+      // MCP tools check writes through the same function.
       await expect(assertCompanyWritable(ownedId)).rejects.toMatchObject({ statusCode: 409 })
-
       const refused = await create('owner', 'Nouvelle')
       expect(refused.status).toBe(403)
-      expect((await json(refused)).error).toBe(
-        'Votre compte est en lecture seule : le paiement de votre abonnement a échoué. Choisissez une offre pour créer des sociétés et reprendre la saisie. Vos données restent consultables et exportables.',
-      )
+      expect((await json(refused)).error).toMatch(/^Votre compte est en lecture seule : le paiement de votre abonnement a échoué\./)
     })
 
-    it('turns read-only after the trial and its grace, writable again once subscribed', async () => {
-      await prisma.cloudBillingAccount.update({
-        where: { ownerUserId: 'u-owner' },
-        data: { subscriptionStatus: null, paymentFailedAt: null, planId: null, trialEndsAt: new Date(Date.now() - 20 * DAY) },
-      })
+    it('is read-only after the end of the contract and while a deletion waits, writable again once subscribed', async () => {
+      await setOwner({ subscriptionStatus: 'canceled', paymentFailedAt: null, subscriptionEndedAt: new Date(Date.now() - 2 * DAY) })
       expect((await companyCall('owner', 'PATCH', ownedId, { phone: '0111111111' })).status).toBe(409)
-      await prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data: { subscriptionStatus: 'active', planId: 'holding' } })
+      expect((await companyCall('owner', 'GET', ownedId)).status).toBe(200)
+      await setOwner({ subscriptionStatus: 'active', deletionScheduledFor: new Date(Date.now() + 20 * DAY), deletionReason: 'requested' })
+      expect((await companyCall('owner', 'PATCH', ownedId, { phone: '0111111111' })).status).toBe(409)
+      await setOwner({ deletionScheduledFor: null, deletionReason: null })
       expect((await companyCall('owner', 'PATCH', ownedId, { phone: '0111111111' })).status).toBe(200)
     })
   })
 
   it('never restricts the operator, nor the companies it created (they belong to no account)', async () => {
-    await prisma.cloudBillingAccount.update({ where: { ownerUserId: 'u-owner' }, data: { subscriptionStatus: 'paused' } })
     const created = await create('admin', 'Société de l’opérateur')
     expect(created.status).toBe(201)
     const { id } = await json(created)

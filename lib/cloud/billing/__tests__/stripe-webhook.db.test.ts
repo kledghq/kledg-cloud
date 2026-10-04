@@ -32,8 +32,6 @@ import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/help
 import {
   checkoutSessionObject,
   invoiceObject,
-  PRICE_ENV,
-  PRICES,
   signatureFor,
   stripeEvent,
   stripeFetch,
@@ -78,11 +76,10 @@ describe.skipIf(!available)('Stripe webhook', () => {
   beforeEach(async () => {
     vi.stubEnv('KLEDG_CLOUD_MODE', 'true')
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', TEST_WEBHOOK_SECRET)
-    for (const [name, value] of Object.entries(PRICE_ENV)) vi.stubEnv(name, value)
     await prisma.cloudStripeEvent.deleteMany()
     await prisma.cloudBillingAccount.deleteMany()
     await prisma.cloudBillingAccount.create({
-      data: { id: 'ba-owner', ownerUserId: 'u-owner', trialEndsAt: new Date('2026-10-31T00:00:00Z') },
+      data: { id: 'ba-owner', ownerUserId: 'u-owner' },
     })
     for (const key of Object.keys(live)) delete live[key]
     api = stripeFetch({
@@ -136,12 +133,18 @@ describe.skipIf(!available)('Stripe webhook', () => {
       stripeSubscriptionId: 'sub_TestKledg0001',
       subscriptionStatus: 'active',
       planId: 'holding',
-      priceId: PRICES.holdingMonthly,
+      priceId: 'price_TestHoldingMonth',
+      billingInterval: 'month',
+      trialUsed: false,
+      extraCompanies: 0,
+      dedicatedDatabase: false,
       currentPeriodEnd: new Date('2026-11-20T00:00:00Z'),
       cancelAtPeriodEnd: false,
       paymentFailedAt: null,
     })
     expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /v1/subscriptions/sub_TestKledg0001'])
+    // Products come expanded: their kledg_plan metadata says what each line is.
+    expect(api.calls[0].body).toContain('expand[0]=items.data.price.product')
     expect(await prisma.cloudStripeEvent.findUnique({ where: { id: event.id } })).toMatchObject({ type: 'checkout.session.completed' })
   })
 
@@ -209,12 +212,63 @@ describe.skipIf(!available)('Stripe webhook', () => {
       id: 'sub_TestKledg0001',
       customer: 'cus_TestOwner0001',
       status: 'active',
-      price: PRICES.essentielMonthly,
+      plan: 'essentiel',
       cancelAtPeriodEnd: true,
       periodEnd: new Date('2027-02-20T00:00:00Z'),
     })
     await deliver(stripeEvent('customer.subscription.updated', live.sub_TestKledg0001))
     expect(await account()).toMatchObject({ planId: 'essentiel', cancelAtPeriodEnd: true, currentPeriodEnd: new Date('2027-02-20T00:00:00Z') })
+  })
+
+  it('records the free trial (one per client) and its end', async () => {
+    await prisma.cloudBillingAccount.update({ where: { id: 'ba-owner' }, data: { stripeCustomerId: 'cus_TestOwner0001' } })
+    const trial = { start: new Date('2026-10-20T10:00:00Z'), end: new Date('2026-11-19T10:00:00Z') }
+    live.sub_TestKledg0001 = subscriptionObject({ id: 'sub_TestKledg0001', customer: 'cus_TestOwner0001', status: 'trialing', plan: 'cabinet', trial })
+    await deliver(stripeEvent('customer.subscription.created', live.sub_TestKledg0001))
+    expect(await account()).toMatchObject({ subscriptionStatus: 'trialing', planId: 'cabinet', trialUsed: true, trialEnd: trial.end })
+    // The trial ends without a card: Stripe cancels the subscription; the trial stays used.
+    live.sub_TestKledg0001 = subscriptionObject({ id: 'sub_TestKledg0001', customer: 'cus_TestOwner0001', status: 'canceled', plan: 'cabinet', endedAt: trial.end })
+    await deliver(stripeEvent('customer.subscription.deleted', live.sub_TestKledg0001, trial.end))
+    expect(await account()).toMatchObject({ subscriptionStatus: 'canceled', trialUsed: true, subscriptionEndedAt: trial.end })
+  })
+
+  it('reads the plan from the product metadata, extra companies and the dedicated database from their lines, yearly prices included', async () => {
+    await prisma.cloudBillingAccount.update({ where: { id: 'ba-owner' }, data: { stripeCustomerId: 'cus_TestOwner0001' } })
+    live.sub_TestKledg0001 = subscriptionObject({
+      id: 'sub_TestKledg0001',
+      customer: 'cus_TestOwner0001',
+      status: 'active',
+      plan: 'cabinet',
+      interval: 'year',
+      extraCompanies: 7,
+      dedicatedDatabase: true,
+      // An early adopter's price lost its lookup key when the price changed: the product still says Cabinet.
+      legacyPrice: true,
+    })
+    await deliver(stripeEvent('customer.subscription.updated', live.sub_TestKledg0001))
+    expect(await account()).toMatchObject({
+      planId: 'cabinet',
+      priceId: 'price_TestLegacyCabinet',
+      billingInterval: 'year',
+      extraCompanies: 7,
+      dedicatedDatabase: true,
+    })
+  })
+
+  it('keeps an account whose owner subscribes again during the retrieval period', async () => {
+    await prisma.cloudBillingAccount.update({
+      where: { id: 'ba-owner' },
+      data: {
+        stripeCustomerId: 'cus_TestOwner0001',
+        subscriptionStatus: 'canceled',
+        deletionScheduledFor: new Date('2026-12-01T00:00:00Z'),
+        deletionReason: 'contract_ended',
+        contractEndNoticeFor: new Date('2026-11-01T00:00:00Z'),
+      },
+    })
+    live.sub_TestKledg0002 = subscriptionObject({ id: 'sub_TestKledg0002', customer: 'cus_TestOwner0001', status: 'active' })
+    await deliver(stripeEvent('customer.subscription.created', live.sub_TestKledg0002))
+    expect(await account()).toMatchObject({ subscriptionStatus: 'active', deletionScheduledFor: null, deletionReason: null, contractEndNoticeFor: null })
   })
 
   it('ignores a stale subscription ending while the account pays another one', async () => {

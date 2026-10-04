@@ -1,6 +1,6 @@
 /**
- * Acceptances of the CGU and CGV (versions in lib/cloud/legal/terms.ts),
- * kept as evidence: user, document, version and time. A new version is
+ * Acceptances of the CGV (versions in lib/cloud/legal/terms.ts),
+ * kept as evidence: user, document, version and date. A new version is
  * accepted again from the banner of the application frame.
  */
 
@@ -17,7 +17,7 @@ type Db = Prisma.TransactionClient | typeof prisma
 /** Records the acceptance of the current version of every document (idempotent). */
 export async function recordTermsAcceptance(userId: string, now: Date = new Date(), db: Db = prisma): Promise<void> {
   await db.cloudTermsAcceptance.createMany({
-    data: TERMS_DOCUMENTS.map((document) => ({ userId, document, version: CURRENT_TERMS[document], acceptedAt: now })),
+    data: TERMS_DOCUMENTS.map((document) => ({ userId, document, version: CURRENT_TERMS[document].version, acceptedAt: now })),
     skipDuplicates: true,
   })
 }
@@ -25,7 +25,7 @@ export async function recordTermsAcceptance(userId: string, now: Date = new Date
 /** Documents whose current version `userId` has not accepted yet. */
 export async function pendingTerms(userId: string): Promise<TermsDocument[]> {
   const accepted = await prisma.cloudTermsAcceptance.findMany({
-    where: { userId, OR: TERMS_DOCUMENTS.map((document) => ({ document, version: CURRENT_TERMS[document] })) },
+    where: { userId, OR: TERMS_DOCUMENTS.map((document) => ({ document, version: CURRENT_TERMS[document].version })) },
     select: { document: true },
   })
   const done = new Set(accepted.map((row) => row.document))

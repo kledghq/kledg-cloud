@@ -1,30 +1,68 @@
 /**
  * Stripe test doubles for Kledg Cloud tests: objects shaped exactly like
- * Stripe's (API 2026-09-30.endive), signed webhook payloads, and a fetch
- * that plays Stripe's API so the real SDK runs without any request leaving
- * the machine. No real key or price id anywhere.
+ * Stripe's (API 2026-09-30.endive): products with their `kledg_plan`
+ * metadata, prices with their lookup keys, subscriptions with expanded
+ * items, signed webhook payloads, and a fetch that plays Stripe's API so the
+ * real SDK runs without any request leaving the machine. No real key, price
+ * or product id anywhere.
  */
 
 import Stripe from 'stripe'
 import { createStripe, STRIPE_API_VERSION } from '@/lib/cloud/billing/stripe'
+import { lookupKey, type BillingInterval, type ProductKind } from '@/lib/cloud/billing/plans'
 
 /** A fake webhook secret with Stripe's prefix (never a real one). */
 export const TEST_WEBHOOK_SECRET = 'whsec_' + 'kledgcloudtestsecret'.repeat(2)
 /** A fake secret key with Stripe's test prefix, built at run time (never a real key). */
 export const TEST_SECRET_KEY = ['sk', 'test', 'kledgcloud'.repeat(3)].join('_')
 
-export const PRICES = {
-  essentielMonthly: 'price_TestEssentielMonth01',
-  holdingMonthly: 'price_TestHoldingMonth0001',
-  holdingYearly: 'price_TestHoldingYear00001',
-  cabinetMonthly: 'price_TestCabinetMonth0001',
+/** The amounts of the offer (cents, excluding tax). */
+export const AMOUNTS: Record<ProductKind, Record<BillingInterval, number>> = {
+  essentiel: { month: 1500, year: 15000 },
+  holding: { month: 3900, year: 39000 },
+  cabinet: { month: 9900, year: 99000 },
+  cabinet_extra_company: { month: 300, year: 3000 },
+  dedicated_database: { month: 2000, year: 20000 },
 }
 
-export const PRICE_ENV = {
-  STRIPE_PRICE_ESSENTIEL_MONTHLY: PRICES.essentielMonthly,
-  STRIPE_PRICE_HOLDING_MONTHLY: PRICES.holdingMonthly,
-  STRIPE_PRICE_HOLDING_YEARLY: PRICES.holdingYearly,
-  STRIPE_PRICE_CABINET_MONTHLY: PRICES.cabinetMonthly,
+const pascal = (kind: string) => kind.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase())
+
+/** Test price id of a lookup key (price_TestHoldingYear...). */
+export function priceId(kind: ProductKind, interval: BillingInterval): string {
+  return `price_Test${pascal(kind)}${interval === 'month' ? 'Month' : 'Year'}`
+}
+
+export function productObject(kind: ProductKind) {
+  return { id: `prod_Test${pascal(kind)}`, object: 'product', active: true, name: `Kledg ${kind}`, metadata: { kledg_plan: kind }, tax_code: 'txcd_10103001' }
+}
+
+/** A price as Stripe returns it; `product` expanded or as an id. */
+export function priceObject(kind: ProductKind, interval: BillingInterval, options: { expandProduct?: boolean; lookup?: string | null } = {}) {
+  return {
+    id: priceId(kind, interval),
+    object: 'price',
+    active: true,
+    billing_scheme: 'per_unit',
+    currency: 'eur',
+    livemode: false,
+    lookup_key: options.lookup === undefined ? lookupKey(kind, interval) : options.lookup,
+    metadata: {},
+    product: options.expandProduct === false ? productObject(kind).id : productObject(kind),
+    recurring: { interval, interval_count: 1, usage_type: 'licensed' },
+    tax_behavior: 'exclusive',
+    type: 'recurring',
+    unit_amount: AMOUNTS[kind][interval],
+  }
+}
+
+/** GET /v1/prices?lookup_keys[]=...: every price of the offer (products as ids, like a list without expand). */
+export function pricesList(kinds: ProductKind[] = ['essentiel', 'holding', 'cabinet', 'cabinet_extra_company', 'dedicated_database']) {
+  return {
+    object: 'list',
+    has_more: false,
+    url: '/v1/prices',
+    data: kinds.flatMap((kind) => (['month', 'year'] as const).map((interval) => priceObject(kind, interval, { expandProduct: false }))),
+  }
 }
 
 const unix = (date: Date) => Math.floor(date.getTime() / 1000)
@@ -33,19 +71,40 @@ export function subscriptionObject(over: {
   id: string
   customer: string
   status: Stripe.Subscription.Status
-  price?: string
+  plan?: ProductKind
+  interval?: BillingInterval
+  extraCompanies?: number
+  dedicatedDatabase?: boolean
   periodEnd?: Date
   cancelAtPeriodEnd?: boolean
   endedAt?: Date | null
+  trial?: { start: Date; end: Date }
+  /** A price that lost its lookup key (an early adopter after a price change): only the product says what it is. */
+  legacyPrice?: boolean
   metadata?: Record<string, string>
 }) {
+  const interval = over.interval ?? 'month'
   const periodEnd = over.periodEnd ?? new Date('2026-11-20T00:00:00Z')
-  const periodStart = new Date(periodEnd.getTime() - 30 * 86_400_000)
-  const price = over.price ?? PRICES.holdingMonthly
+  const periodStart = new Date(periodEnd.getTime() - (interval === 'month' ? 30 : 365) * 86_400_000)
+  const item = (kind: ProductKind, quantity: number, suffix: string) => ({
+    id: `si_${over.id.slice(4)}${suffix}`,
+    object: 'subscription_item',
+    created: unix(periodStart),
+    current_period_end: unix(periodEnd),
+    current_period_start: unix(periodStart),
+    metadata: {},
+    price: { ...priceObject(kind, interval, { lookup: over.legacyPrice ? null : undefined }), ...(over.legacyPrice ? { id: `price_TestLegacy${pascal(kind)}` } : {}) },
+    quantity,
+    subscription: over.id,
+  })
+  const items = [
+    item(over.plan ?? 'holding', 1, ''),
+    ...(over.extraCompanies ? [item('cabinet_extra_company', over.extraCompanies, 'X')] : []),
+    ...(over.dedicatedDatabase ? [item('dedicated_database', 1, 'D')] : []),
+  ]
   return {
     id: over.id,
     object: 'subscription',
-    application: null,
     automatic_tax: { disabled_reason: null, enabled: true, liability: { type: 'self' } },
     billing_cycle_anchor: unix(periodStart),
     cancel_at: over.cancelAtPeriodEnd ? unix(periodEnd) : null,
@@ -55,43 +114,16 @@ export function subscriptionObject(over: {
     created: unix(periodStart),
     currency: 'eur',
     customer: over.customer,
-    default_payment_method: 'pm_TestCard000001',
+    default_payment_method: over.trial ? null : 'pm_TestCard000001',
     ended_at: over.endedAt ? unix(over.endedAt) : null,
-    items: {
-      object: 'list',
-      data: [
-        {
-          id: `si_${over.id.slice(4)}`,
-          object: 'subscription_item',
-          created: unix(periodStart),
-          current_period_end: unix(periodEnd),
-          current_period_start: unix(periodStart),
-          metadata: {},
-          price: {
-            id: price,
-            object: 'price',
-            active: true,
-            currency: 'eur',
-            lookup_key: null,
-            product: 'prod_TestKledgCloud01',
-            recurring: { interval: 'month', interval_count: 1, usage_type: 'licensed' },
-            tax_behavior: 'exclusive',
-            type: 'recurring',
-            unit_amount: 2900,
-          },
-          quantity: 1,
-          subscription: over.id,
-        },
-      ],
-      has_more: false,
-      url: `/v1/subscription_items?subscription=${over.id}`,
-    },
+    items: { object: 'list', data: items, has_more: false, url: `/v1/subscription_items?subscription=${over.id}` },
     latest_invoice: 'in_TestLatest00001',
     livemode: false,
     metadata: over.metadata ?? {},
     status: over.status,
-    trial_end: null,
-    trial_start: null,
+    trial_end: over.trial ? unix(over.trial.end) : null,
+    trial_settings: { end_behavior: { missing_payment_method: 'cancel' } },
+    trial_start: over.trial ? unix(over.trial.start) : null,
   }
 }
 
@@ -107,7 +139,7 @@ export function checkoutSessionObject(over: { id: string; customer: string; subs
     customer_details: { email: 'owner@test.local', tax_exempt: 'none', tax_ids: [{ type: 'eu_vat', value: 'FR40303265045' }] },
     livemode: false,
     mode: over.mode ?? 'subscription',
-    payment_status: 'paid',
+    payment_status: 'no_payment_required',
     status: 'complete',
     subscription: over.subscription,
     tax_id_collection: { enabled: true, required: 'never' },
@@ -129,7 +161,7 @@ export function invoiceObject(over: { id: string; customer: string; subscription
       ? { quote_details: null, subscription_details: { metadata: {}, subscription: over.subscription }, type: 'subscription_details' }
       : null,
     status: over.status ?? 'paid',
-    total: 3480,
+    total: 4680,
   }
 }
 
@@ -159,15 +191,18 @@ export function signatureFor(payload: string, secret = TEST_WEBHOOK_SECRET, time
 export interface StripeCall {
   method: string
   path: string
+  /** Form body (POST) or query string (GET). */
   body: string
   idempotencyKey: string | null
 }
 
+type Answer = { status?: number; body: unknown }
+
 /**
  * A fetch playing Stripe's API: `routes` maps "METHOD /v1/path" to a JSON
- * answer (or a function of the request). Unknown routes answer Stripe's 404.
+ * answer (or a function of the call). Unknown routes answer Stripe's 404.
  */
-export function stripeFetch(routes: Record<string, unknown | ((call: StripeCall) => { status?: number; body: unknown })>) {
+export function stripeFetch(routes: Record<string, unknown>) {
   const calls: StripeCall[] = []
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
@@ -176,14 +211,14 @@ export function stripeFetch(routes: Record<string, unknown | ((call: StripeCall)
     const call: StripeCall = {
       method: init?.method ?? 'GET',
       path: url.pathname,
-      body: typeof init?.body === 'string' ? init.body : url.search.slice(1),
+      body: typeof init?.body === 'string' ? init.body : decodeURIComponent(url.search.slice(1)),
       idempotencyKey: headers.get('idempotency-key'),
     }
     calls.push(call)
     const route = routes[`${call.method} ${call.path}`]
-    const answer =
+    const answer: Answer =
       typeof route === 'function'
-        ? (route as (c: StripeCall) => { status?: number; body: unknown })(call)
+        ? (route as (c: StripeCall) => Answer)(call)
         : route === undefined
           ? { status: 404, body: { error: { type: 'invalid_request_error', code: 'resource_missing', message: 'No such resource' } } }
           : { body: route }
@@ -191,3 +226,6 @@ export function stripeFetch(routes: Record<string, unknown | ((call: StripeCall)
   }) as typeof fetch
   return { fetchFn, calls, stripe: createStripe(TEST_SECRET_KEY, fetchFn) }
 }
+
+/** Form fields of a Stripe call (`a[b][0]=c` keys kept flat). */
+export const form = (body: string) => Object.fromEntries(new URLSearchParams(body))

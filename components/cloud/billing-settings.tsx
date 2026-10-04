@@ -14,9 +14,10 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { DateDisplay, EmptyState, StatusBadge, formatAmount, type StatusTone } from '@/components/shared'
 
 const PHASES: Record<BillingOverview['phase'], { label: string; tone: StatusTone }> = {
+  none: { label: 'Aucune offre', tone: 'neutral' },
   trial: { label: 'Essai gratuit', tone: 'info' },
   active: { label: 'Actif', tone: 'success' },
-  grace: { label: 'Action requise', tone: 'warning' },
+  grace: { label: 'Paiement à régler', tone: 'warning' },
   read_only: { label: 'Lecture seule', tone: 'danger' },
 }
 
@@ -27,8 +28,10 @@ const INVOICE_STATUS: Record<string, { label: string; tone: StatusTone }> = {
   void: { label: 'Annulée', tone: 'neutral' },
 }
 
-function limitText(limit: number | null): string {
-  if (limit === null) return 'sans limite'
+const PER: Record<BillingInterval, string> = { month: 'mois', year: 'an' }
+
+function limitText(limit: number | null, included: number | null = null): string {
+  if (limit === null) return included ? `${included} sociétés incluses` : 'sans limite'
   return limit === 1 ? '1 société' : `${limit} sociétés`
 }
 
@@ -42,6 +45,15 @@ async function openStripe(path: string, body?: unknown): Promise<void> {
   const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string }
   if (!response.ok || !data.url) throw new Error(data.error ?? "Stripe n'a pas répondu. Réessayez dans quelques instants.")
   window.location.assign(data.url)
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  )
 }
 
 export function BillingSettings({ overview, checkout }: { overview: BillingOverview; checkout: 'success' | 'cancel' | null }) {
@@ -61,18 +73,18 @@ export function BillingSettings({ overview, checkout }: { overview: BillingOverv
 
   const choose = (plan: PlanId) => run(plan, () => openStripe('/api/billing/checkout', { plan, interval }))
   const portal = () => run('portal', () => openStripe('/api/billing/portal'))
-  const offered = overview.plans.filter((plan) => plan.intervals.includes(interval))
-  const yearly = overview.plans.some((plan) => plan.intervals.includes('year'))
+  const offered = overview.plans.filter((plan) => plan.prices[interval] !== undefined)
+  const yearly = overview.plans.some((plan) => plan.prices.year !== undefined)
 
   return (
     <div className="space-y-6">
       {checkout === 'success' ? (
         <Alert>
-          <AlertDescription>Merci&nbsp;! Votre abonnement est enregistré&nbsp;: il apparaît ici dans quelques instants.</AlertDescription>
+          <AlertDescription>Merci&nbsp;! Votre offre est enregistrée&nbsp;: elle apparaît ici dans quelques instants.</AlertDescription>
         </Alert>
       ) : checkout === 'cancel' ? (
         <Alert>
-          <AlertDescription>Paiement annulé&nbsp;: rien n&apos;a été facturé.</AlertDescription>
+          <AlertDescription>Rien n&apos;a été souscrit ni facturé.</AlertDescription>
         </Alert>
       ) : null}
 
@@ -83,48 +95,55 @@ export function BillingSettings({ overview, checkout }: { overview: BillingOverv
               <h2>Votre offre</h2>
             </CardTitle>
             <CardDescription>
-              {overview.planName ? `Offre ${overview.planName}` : overview.subscribed ? 'Abonnement en cours' : 'Aucun abonnement'}
+              {overview.planName
+                ? `Offre ${overview.planName}${overview.billingInterval ? `, facturée par ${PER[overview.billingInterval]}` : ''}`
+                : 'Aucune offre en cours'}
             </CardDescription>
           </div>
           <StatusBadge tone={phase.tone}>{phase.label}</StatusBadge>
         </CardHeader>
         <CardContent className="space-y-4">
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-muted-foreground">Sociétés</dt>
-              <dd className="num">
-                {overview.companyCount} sur {limitText(overview.companyLimit)}
-              </dd>
-            </div>
-            {overview.phase === 'trial' && overview.trialEndsAt ? (
-              <div>
-                <dt className="text-muted-foreground">Fin de l&apos;essai</dt>
-                <dd>
-                  <DateDisplay value={overview.trialEndsAt} format="long" />
-                </dd>
-              </div>
+            <Fact label="Sociétés">
+              <span className="num">
+                {overview.companyCount}
+                {overview.planId ? ` sur ${limitText(overview.companyLimit, overview.planId === 'cabinet' ? 25 : null)}` : ''}
+                {overview.extraCompanies > 0 ? `, dont ${overview.extraCompanies} en supplément` : ''}
+              </span>
+            </Fact>
+            {overview.trialEndsAt ? (
+              <Fact label="Fin de l'essai">
+                <DateDisplay value={overview.trialEndsAt} format="long" />
+              </Fact>
             ) : null}
-            {overview.readOnlyAt && overview.phase !== 'active' ? (
-              <div>
-                <dt className="text-muted-foreground">{overview.phase === 'read_only' ? 'En lecture seule depuis le' : 'Lecture seule à partir du'}</dt>
-                <dd>
-                  <DateDisplay value={overview.readOnlyAt} format="long" />
-                </dd>
-              </div>
+            {overview.readOnlyAt && overview.phase === 'grace' ? (
+              <Fact label="Lecture seule à partir du">
+                <DateDisplay value={overview.readOnlyAt} format="long" />
+              </Fact>
+            ) : null}
+            {overview.retrievalEndsAt ? (
+              <Fact label="Données exportables jusqu'au">
+                <DateDisplay value={overview.retrievalEndsAt} format="long" />
+              </Fact>
+            ) : null}
+            {overview.deletionAt && overview.reason === 'deletion_requested' ? (
+              <Fact label="Suppression du compte le">
+                <DateDisplay value={overview.deletionAt} format="long" />
+              </Fact>
             ) : null}
             {overview.endsAt ? (
-              <div>
-                <dt className="text-muted-foreground">Fin de l&apos;abonnement</dt>
-                <dd>
-                  <DateDisplay value={overview.endsAt} format="long" />
-                </dd>
-              </div>
+              <Fact label="Fin de l'abonnement">
+                <DateDisplay value={overview.endsAt} format="long" />
+              </Fact>
             ) : null}
           </dl>
-          {overview.phase === 'read_only' ? (
+          {overview.phase === 'trial' ? (
             <p className="text-muted-foreground text-sm">
-              Vos sociétés restent consultables et exportables (FEC, export complet). Choisissez une offre pour reprendre la saisie.
+              L&apos;essai ne devient pas payant sans votre accord&nbsp;: ajoutez un moyen de paiement dans «&nbsp;Gérer mon abonnement&nbsp;» pour continuer après
+              l&apos;essai. Sans cela, il prend fin à sa date.
             </p>
+          ) : overview.phase === 'read_only' ? (
+            <p className="text-muted-foreground text-sm">Vos sociétés restent consultables et exportables (FEC, export complet).</p>
           ) : null}
           {overview.hasCustomer ? (
             <Button variant="outline" size="sm" onClick={portal} loading={pending === 'portal'} disabled={pending !== null}>
@@ -135,14 +154,19 @@ export function BillingSettings({ overview, checkout }: { overview: BillingOverv
         </CardContent>
       </Card>
 
-      {overview.subscribed ? null : (
+      {overview.subscribed || overview.reason === 'deletion_requested' ? null : (
         <Card>
           <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
             <div className="space-y-1.5">
               <CardTitle>
                 <h2>Choisir une offre</h2>
               </CardTitle>
-              <CardDescription>Prix hors taxes, TVA calculée au paiement. Les personnes que vous invitez dans vos sociétés ne paient pas.</CardDescription>
+              <CardDescription>
+                {overview.trialAvailable
+                  ? `Essai gratuit de ${overview.trialDays} jours, sans carte bancaire. `
+                  : ''}
+                Prix hors taxes, TVA calculée au paiement. Les personnes que vous invitez dans vos sociétés ne paient pas.
+              </CardDescription>
             </div>
             {yearly ? (
               <ToggleGroup
@@ -160,18 +184,27 @@ export function BillingSettings({ overview, checkout }: { overview: BillingOverv
           </CardHeader>
           <CardContent>
             {!overview.stripeConfigured || offered.length === 0 ? (
-              <EmptyState title="Offres bientôt disponibles" description="Les abonnements ouvrent prochainement. Votre essai et vos données ne sont pas concernés." />
+              <EmptyState title="Offres bientôt disponibles" description="Les abonnements ouvrent prochainement. Vos données ne sont pas concernées." />
             ) : (
               <ul className="grid gap-3 sm:grid-cols-3">
                 {offered.map((plan) => (
                   <li key={plan.id} className="flex flex-col gap-3 rounded-lg border p-4">
                     <div className="space-y-1">
                       <h3 className="font-medium">{plan.name}</h3>
+                      <p className="num text-lg font-semibold">
+                        {formatAmount((plan.prices[interval] ?? 0) / 100)}{' '}
+                        <span className="text-muted-foreground text-sm font-normal">HT / {PER[interval]}</span>
+                      </p>
                       <p className="text-muted-foreground text-sm">{plan.description}</p>
-                      <p className="text-sm">Jusqu&apos;à {limitText(plan.companyLimit)}</p>
+                      <p className="text-sm">
+                        {plan.companyLimit === null ? `${plan.includedCompanies} sociétés incluses` : `Jusqu'à ${limitText(plan.companyLimit)}`}
+                        {plan.extraCompany[interval] !== undefined
+                          ? `, puis ${formatAmount((plan.extraCompany[interval] ?? 0) / 100)} HT par société et par ${PER[interval]}`
+                          : ''}
+                      </p>
                     </div>
                     <Button size="sm" className="mt-auto" onClick={() => choose(plan.id)} loading={pending === plan.id} disabled={pending !== null}>
-                      Choisir {plan.name}
+                      {overview.trialAvailable ? `Essayer ${plan.name}` : `Choisir ${plan.name}`}
                     </Button>
                   </li>
                 ))}

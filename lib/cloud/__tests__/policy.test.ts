@@ -35,14 +35,14 @@ describe('Kledg Cloud policy', () => {
   it('declares its public routes and pages with a reason', () => {
     expect(Object.keys(CLOUD_SELF_AUTHENTICATED_API_ROUTES)).toEqual(['/api/signup', '/api/billing/webhook', '/api/cron/cloud-maintenance'])
     for (const reason of Object.values(CLOUD_SELF_AUTHENTICATED_API_ROUTES)) expect(reason.length).toBeGreaterThan(20)
-    expect(CLOUD_PUBLIC_PAGES).toEqual(['/signup', '/legal'])
+    expect(CLOUD_PUBLIC_PAGES).toEqual(['/signup'])
     expect(Object.keys(CLOUD_RATE_LIMITS).every((name) => name.startsWith('cloud-'))).toBe(true)
   })
 
   it('is what the instance policy answers in cloud mode, and Kledg defaults without it', async () => {
     vi.stubEnv('KLEDG_CLOUD_MODE', 'true')
     const cloud = await import('@/lib/instance/policy')
-    expect(cloud.PUBLIC_PAGES).toEqual(['/signup', '/legal'])
+    expect(cloud.PUBLIC_PAGES).toEqual(['/signup'])
     expect(cloud.REQUIRE_EMAIL_VERIFICATION).toBe(true)
     expect(await cloud.isActionAllowed('delete-account', user)).toBe(false)
     expect(cloud.SELF_AUTHENTICATED_API_ROUTES).toEqual(CLOUD_SELF_AUTHENTICATED_API_ROUTES)

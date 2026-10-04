@@ -10,14 +10,15 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { LEGAL_URLS } from '@/lib/cloud/config'
 
 /**
  * Sign-up form of Kledg Cloud (POST /api/signup). The answer is the same
  * whether the address has an account or not: the next step is always in the
- * mailbox. `termsVersion` is the version of the CGU and CGV shown here, so
+ * mailbox. `termsVersion` is the version of the CGV shown here, so
  * an acceptance always names what was read.
  */
-export function SignupForm({ termsVersion, trialDays }: { termsVersion: string; trialDays: number }) {
+export function SignupForm({ termsVersion, cgvVersion, trialDays }: { termsVersion: string; cgvVersion: string; trialDays: number }) {
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
@@ -91,7 +92,7 @@ export function SignupForm({ termsVersion, trialDays }: { termsVersion: string; 
             <h1>Créer un compte</h1>
           </CardTitle>
           <CardDescription>
-            {trialDays} jours d&apos;essai gratuit, sans carte bancaire. Vous créez ensuite votre première société.
+            {trialDays} jours d&apos;essai gratuit, sans carte bancaire, en choisissant votre offre. Vous créez ensuite votre première société.
           </CardDescription>
         </CardHeader>
         <form onSubmit={submit} noValidate>
@@ -158,17 +159,13 @@ export function SignupForm({ termsVersion, trialDays }: { termsVersion: string; 
               <Label htmlFor="signup-terms" className="text-sm leading-snug font-normal">
                 <span>
                   J&apos;accepte les{' '}
-                  <Link href="/legal/cgu" target="_blank" className="text-link underline-offset-4 hover:underline">
-                    conditions générales d&apos;utilisation
-                  </Link>{' '}
-                  et les{' '}
-                  <Link href="/legal/cgv" target="_blank" className="text-link underline-offset-4 hover:underline">
+                  <a href={LEGAL_URLS.cgv} target="_blank" rel="noreferrer" className="text-link underline-offset-4 hover:underline">
                     conditions générales de vente
-                  </Link>
-                  , et j&apos;ai lu la{' '}
-                  <Link href="/legal/confidentialite" target="_blank" className="text-link underline-offset-4 hover:underline">
+                  </a>{' '}
+                  (version {cgvVersion}) et j&apos;ai lu la{' '}
+                  <a href={LEGAL_URLS.privacy} target="_blank" rel="noreferrer" className="text-link underline-offset-4 hover:underline">
                     politique de confidentialité
-                  </Link>
+                  </a>
                   .
                 </span>
               </Label>

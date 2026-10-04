@@ -6,6 +6,11 @@
  * Every hosted feature (public sign-up, billing, read-only mode, the
  * operator console) is on only with KLEDG_CLOUD_MODE=true. Without it this
  * repository behaves exactly like Kledg: its own test suite runs that way.
+ *
+ * The durations default to the commitments of the published CGV
+ * (version 1.0, https://www.kledg.com/fr/terms): a 30 day trial, 14 days
+ * after a failed payment before read-only, 30 days of read-only retrieval
+ * after the contract ends, 30 days to cancel an account deletion.
  */
 
 type Env = Record<string, string | undefined>
@@ -22,28 +27,28 @@ function positiveInteger(value: string | undefined, fallback: number, max: numbe
 }
 
 export interface CloudSettings {
-  /** Free trial length, without a card (KLEDG_CLOUD_TRIAL_DAYS, default 30). */
+  /** Free trial, without a card, started at Checkout (KLEDG_CLOUD_TRIAL_DAYS, CGV: 30). */
   trialDays: number
-  /**
-   * Days an account keeps writing after its trial ended, a payment failed or
-   * its subscription ended, before it turns read-only (KLEDG_CLOUD_GRACE_DAYS,
-   * default 14).
-   */
+  /** Days after a failed payment before the account turns read-only (KLEDG_CLOUD_GRACE_DAYS, CGV: 14). */
   graceDays: number
-  /** Days between an account deletion request and the deletion (KLEDG_CLOUD_DELETION_DAYS, default 30). */
+  /** Read-only retrieval period after the contract ends, before deletion (KLEDG_CLOUD_RETRIEVAL_DAYS, CGV: 30). */
+  retrievalDays: number
+  /** Days to cancel an account deletion request, account read-only meanwhile (KLEDG_CLOUD_DELETION_DAYS, CGV: 30). */
   deletionDays: number
-  /** Companies an account may hold during its trial (KLEDG_CLOUD_TRIAL_COMPANIES, default 3). */
-  trialCompanyLimit: number
+  /** Days before an annual renewal when the reminder is sent (KLEDG_CLOUD_RENEWAL_NOTICE_DAYS, CGV: at least a month). */
+  renewalNoticeDays: number
   /** Days an account that never confirmed its address is kept (KLEDG_CLOUD_UNVERIFIED_DAYS, default 7). */
   unverifiedAccountDays: number
 }
 
 export function cloudSettings(env: Env = process.env): CloudSettings {
   return {
-    trialDays: positiveInteger(env.KLEDG_CLOUD_TRIAL_DAYS, 30, 365),
+    trialDays: positiveInteger(env.KLEDG_CLOUD_TRIAL_DAYS, 30, 90),
     graceDays: positiveInteger(env.KLEDG_CLOUD_GRACE_DAYS, 14, 90),
-    deletionDays: positiveInteger(env.KLEDG_CLOUD_DELETION_DAYS, 30, 365),
-    trialCompanyLimit: positiveInteger(env.KLEDG_CLOUD_TRIAL_COMPANIES, 3, 1000),
+    retrievalDays: positiveInteger(env.KLEDG_CLOUD_RETRIEVAL_DAYS, 30, 90),
+    deletionDays: positiveInteger(env.KLEDG_CLOUD_DELETION_DAYS, 30, 90),
+    // Never below 31 days: the CGV promise "at least one month before".
+    renewalNoticeDays: Math.max(31, positiveInteger(env.KLEDG_CLOUD_RENEWAL_NOTICE_DAYS, 35, 90)),
     unverifiedAccountDays: positiveInteger(env.KLEDG_CLOUD_UNVERIFIED_DAYS, 7, 90),
   }
 }
@@ -55,8 +60,15 @@ export const CLOUD_PATHS = {
   billing: '/settings/billing',
   data: '/settings/data',
   console: '/settings/console',
-  legal: '/legal',
 } as const
 
-/** Link of refusals that a plan lifts (company limit, read-only account). */
+/** Legal documents, published on the website (French versions). */
+export const LEGAL_URLS = {
+  cgv: 'https://www.kledg.com/fr/terms',
+  privacy: 'https://www.kledg.com/fr/privacy',
+  dpa: 'https://www.kledg.com/fr/dpa',
+  legalNotice: 'https://www.kledg.com/fr/legal-notice',
+} as const
+
+/** Link of refusals that a plan lifts (company limit, no subscription, read-only account). */
 export const UPGRADE_LINK = { label: 'Voir les offres', href: CLOUD_PATHS.billing } as const

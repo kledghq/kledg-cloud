@@ -16,36 +16,50 @@ datasource db {
 // models stay untouched; lib/cloud removes the rows it owns. docs/cloud.md.
 // ---------------------------------------------------------------------------
 
-/// The paying entity: one per user who owns companies. Holds the trial, the
-/// Stripe customer and subscription (mirrored by the webhook) and a pending
-/// deletion request. lib/cloud/billing/state.ts derives the access from it.
+/// The paying entity: one per user who owns companies. Mirrors the Stripe
+/// customer and subscription (webhook) and holds a pending deletion.
+/// lib/cloud/billing/state.ts derives the access from it.
 model CloudBillingAccount {
-  id                    String                  @id @default(cuid())
+  id                   String                  @id @default(cuid())
   /// The owner (users.id). Members invited to the owner's companies never pay.
-  ownerUserId           String                  @unique
-  stripeCustomerId      String?                 @unique
-  stripeSubscriptionId  String?                 @unique
-  /// Stripe subscription status (active, trialing, past_due, unpaid, canceled...), null without one.
-  subscriptionStatus    String?
-  /// lib/cloud/billing/plans.ts, from the subscription's price.
-  planId                String?
-  priceId               String?
-  trialEndsAt           DateTime
-  currentPeriodEnd      DateTime?
-  cancelAtPeriodEnd     Boolean                 @default(false)
-  subscriptionEndedAt   DateTime?
+  ownerUserId          String                  @unique
+  stripeCustomerId     String?                 @unique
+  stripeSubscriptionId String?                 @unique
+  /// Stripe subscription status (trialing, active, past_due, unpaid, canceled...), null without one.
+  subscriptionStatus   String?
+  /// lib/cloud/billing/plans.ts, from the kledg_plan metadata of the subscribed product.
+  planId               String?
+  priceId              String?
+  /// "month" or "year".
+  billingInterval      String?
+  /// End of the Stripe trial, when there is one.
+  trialEnd             DateTime?
+  /// The account already had its free trial (one per client, CGV art. 5).
+  trialUsed            Boolean                 @default(false)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean                 @default(false)
+  subscriptionEndedAt  DateTime?
   /// First failed payment of the current incident, cleared once paid.
-  paymentFailedAt       DateTime?
-  stripeSyncedAt        DateTime?
-  deletionRequestedAt   DateTime?
-  deletionScheduledFor  DateTime?
-  /// The owner asked to delete the books too (explicit warning acknowledged).
-  deletionIncludesBooks Boolean                 @default(false)
-  createdAt             DateTime                @default(now())
-  updatedAt             DateTime                @updatedAt
-  companies             CloudCompanyOwnership[]
+  paymentFailedAt      DateTime?
+  /// Cabinet: companies billed beyond the 25 included (quantity of the extra company line).
+  extraCompanies       Int                     @default(0)
+  /// Dedicated database add-on subscribed.
+  dedicatedDatabase    Boolean                 @default(false)
+  stripeSyncedAt       DateTime?
+  /// Period end the annual renewal reminder was sent for.
+  renewalReminderFor   DateTime?
+  /// End of contract the retrieval notice was sent for.
+  contractEndNoticeFor DateTime?
+  deletionRequestedAt  DateTime?
+  deletionScheduledFor DateTime?
+  /// "requested" (by the owner) or "contract_ended" (after the retrieval period).
+  deletionReason       String?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  companies            CloudCompanyOwnership[]
 
   @@index([deletionScheduledFor])
+  @@index([subscriptionStatus])
   @@map("cloud_billing_accounts")
 }
 
@@ -62,18 +76,6 @@ model CloudCompanyOwnership {
   @@map("cloud_company_ownerships")
 }
 
-/// Books kept after their owner's account was deleted (Code de commerce
-/// art. L123-22: 10 years): the company stays archived until retainUntil,
-/// then the maintenance job purges it.
-model CloudRetainedCompany {
-  companyId   String   @id
-  retainUntil DateTime
-  createdAt   DateTime @default(now())
-
-  @@index([retainUntil])
-  @@map("cloud_retained_companies")
-}
-
 /// Stripe events already applied (webhook idempotency), purged after 90 days.
 model CloudStripeEvent {
   id          String   @id
@@ -84,11 +86,11 @@ model CloudStripeEvent {
   @@map("cloud_stripe_events")
 }
 
-/// Acceptance of a version of the CGU or CGV (lib/cloud/legal/terms.ts).
+/// Acceptance of a version of the CGV (lib/cloud/legal/terms.ts), with its date.
 model CloudTermsAcceptance {
   id         String   @id @default(cuid())
   userId     String
-  /// "cgu" or "cgv".
+  /// "cgv".
   document   String
   version    String
   acceptedAt DateTime @default(now())

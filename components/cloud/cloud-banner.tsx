@@ -1,45 +1,42 @@
 import Link from 'next/link'
 import type { InstanceActor } from '@/lib/instance/types'
 import { cn } from '@/lib/utils'
-import { accessOf, findBillingAccount } from '@/lib/cloud/billing/billing-account.service'
+import { LEGAL_URLS } from '@/lib/cloud/config'
+import { accessOf, belongsToAnyCompany, findBillingAccount, virtualBillingAccount } from '@/lib/cloud/billing/billing-account.service'
 import { billingNotice } from '@/lib/cloud/billing/notice'
 import { pendingTerms } from '@/lib/cloud/legal/terms-acceptance.service'
-import { currentTermsVersion } from '@/lib/cloud/legal/terms'
+import { CURRENT_TERMS, currentTermsVersion } from '@/lib/cloud/legal/terms'
 import { AcceptTermsButton } from './accept-terms-button'
 
 /**
  * Banner of Kledg Cloud above every page of the application frame
- * (InstanceBanner slot): new terms to accept first, then the billing state
- * of the user's own account (trial, payment to fix, end of subscription,
- * read-only, deletion in progress). Nothing for an account with nothing to
- * say, for members who own no company, nor for the operator.
+ * (InstanceBanner slot): a new CGV version to accept first, then the
+ * billing state of the user's own account (how to start, trial, payment to
+ * fix, end of subscription, retrieval period, read-only, deletion in
+ * progress). Nothing for an account with nothing to say, for members
+ * invited into someone else's companies, nor for the operator.
  */
 export async function CloudBanner({ user, now = new Date() }: { user: InstanceActor; now?: Date }) {
   // The operator (instance administrator) is not a customer.
   if (user.role === 'admin') return null
-  const [terms, account] = await Promise.all([pendingTerms(user.id), findBillingAccount(user.id)])
+  const [terms, stored, hasCompanies] = await Promise.all([pendingTerms(user.id), findBillingAccount(user.id), belongsToAnyCompany(user.id)])
 
   if (terms.length > 0) {
     return (
       <div role="status" className="bg-surface text-muted-foreground flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b px-4 py-1.5 text-center text-xs">
         <span>
           Nos{' '}
-          <Link href="/legal/cgu" target="_blank" className="text-foreground underline underline-offset-2">
-            conditions générales d&apos;utilisation
-          </Link>{' '}
-          et{' '}
-          <Link href="/legal/cgv" target="_blank" className="text-foreground underline underline-offset-2">
-            de vente
-          </Link>{' '}
-          évoluent. Lisez-les et acceptez-les pour continuer à utiliser Kledg.
+          <a href={LEGAL_URLS.cgv} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2">
+            conditions générales de vente
+          </a>{' '}
+          évoluent (version {CURRENT_TERMS.cgv.version}). Lisez-les et acceptez-les pour continuer à utiliser Kledg.
         </span>
         <AcceptTermsButton version={currentTermsVersion()} />
       </div>
     )
   }
 
-  if (!account) return null
-  const notice = billingNotice(accessOf(account, now), account.deletionScheduledFor, now)
+  const notice = billingNotice(accessOf(stored ?? virtualBillingAccount(user.id, now), now), now, { hasCompanies })
   if (!notice) return null
   return (
     <div

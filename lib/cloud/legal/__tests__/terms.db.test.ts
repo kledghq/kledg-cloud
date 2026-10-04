@@ -1,5 +1,5 @@
 /**
- * CGU and CGV acceptance (POST /api/cloud/terms) against PostgreSQL: the
+ * CGV acceptance (POST /api/cloud/terms) against PostgreSQL: the
  * acceptance of a new version is stored with its version and time, an
  * outdated version is refused, and the route needs a session and cloud mode.
  *
@@ -21,8 +21,7 @@ const state = await vi.hoisted(async () => {
 vi.mock('@/lib/session', () => ({ getCurrentUser: async () => state.user }))
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
-import { CURRENT_TERMS, currentTermsVersion, isLegalPageSlug } from '../terms'
-import { LEGAL_DOCUMENTS } from '../documents'
+import { CURRENT_TERMS, currentTermsVersion } from '../terms'
 
 const available = await testDatabaseAvailable()
 let prisma: typeof import('@/lib/prisma').prisma
@@ -32,18 +31,6 @@ let pendingTerms: typeof import('../terms-acceptance.service').pendingTerms
 const USER = { id: 'u-member', email: 'member@test.local', name: 'Membre', role: 'user' }
 const accept = (version: string) =>
   POST(new NextRequest('http://localhost/api/cloud/terms', { method: 'POST', body: JSON.stringify({ version }), headers: { 'content-type': 'application/json' } }))
-
-describe('legal documents', () => {
-  it('exist for every legal page, with French text without dashes', () => {
-    for (const [slug, document] of Object.entries(LEGAL_DOCUMENTS)) {
-      expect(isLegalPageSlug(slug)).toBe(true)
-      const text = [document.intro, ...document.sections.flatMap((s) => [s.heading, ...s.paragraphs])].join('\n')
-      expect(text).not.toMatch(/[–—]/)
-      expect(text, slug).not.toMatch(/ [:;]/)
-    }
-    expect(isLegalPageSlug('toString')).toBe(false)
-  })
-})
 
 describe.skipIf(!available)('terms acceptance', () => {
   beforeAll(async () => {
@@ -65,23 +52,21 @@ describe.skipIf(!available)('terms acceptance', () => {
 
   it('records the current versions once accepted, with the time', async () => {
     // A member created by an administrator never accepted anything: the banner asks.
-    expect(await pendingTerms(USER.id)).toEqual(['cgu', 'cgv'])
+    expect(await pendingTerms(USER.id)).toEqual(['cgv'])
     const response = await accept(currentTermsVersion())
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ accepted: true })
     expect(await pendingTerms(USER.id)).toEqual([])
     const rows = await prisma.cloudTermsAcceptance.findMany({ where: { userId: USER.id }, orderBy: { document: 'asc' } })
-    expect(rows.map((r) => [r.document, r.version])).toEqual([
-      ['cgu', CURRENT_TERMS.cgu],
-      ['cgv', CURRENT_TERMS.cgv],
-    ])
+    expect(rows.map((r) => [r.document, r.version])).toEqual([['cgv', CURRENT_TERMS.cgv.version]])
+    expect(currentTermsVersion()).toBe('cgv:1.0')
     // Accepting again changes nothing.
     expect((await accept(currentTermsVersion())).status).toBe(200)
-    expect(await prisma.cloudTermsAcceptance.count({ where: { userId: USER.id } })).toBe(2)
+    expect(await prisma.cloudTermsAcceptance.count({ where: { userId: USER.id } })).toBe(1)
   })
 
   it('refuses a version that is no longer the current one', async () => {
-    const response = await accept('cgu:2020-01-01,cgv:2020-01-01')
+    const response = await accept('cgv:0.9')
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({ error: 'Les conditions ont changé entre-temps. Rechargez la page pour lire la nouvelle version.' })
   })

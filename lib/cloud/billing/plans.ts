@@ -1,15 +1,18 @@
 /**
  * Plans of Kledg Cloud. Pure (no database, no Node APIs).
  *
- * The names, limits and descriptions below are placeholders until the
- * offer is final; prices live in Stripe only. Each plan reads the Stripe
- * price ids of its billing intervals from environment variables, so no
- * price id is ever written in the code (docs/cloud.md, "Stripe"). A plan
- * whose price is not configured is not offered at checkout.
+ * Prices live in Stripe only: each price carries a lookup key, resolved at
+ * run time (stripe-prices.ts), and each product a `kledg_plan` metadata
+ * that names what it is. No price id is ever written in the code or the
+ * environment, so the operator can create a new price and move the lookup
+ * key to it without a deployment. Existing subscriptions keep the price
+ * they were sold at (early adopters keep it for life): nothing here ever
+ * migrates them.
  *
- * What a plan limits is the number of companies its billing account owns:
- * the companies created by the account's owner. Members invited to a
- * company never pay and never count.
+ * What a plan limits is the number of companies its billing account owns
+ * (the companies created by the account's owner). Members invited to a
+ * company never pay and never count. Cabinet includes 25 companies; each
+ * company beyond is billed through a quantity line on the subscription.
  */
 
 export const PLAN_IDS = ['essentiel', 'holding', 'cabinet'] as const
@@ -18,16 +21,20 @@ export type PlanId = (typeof PLAN_IDS)[number]
 export const BILLING_INTERVALS = ['month', 'year'] as const
 export type BillingInterval = (typeof BILLING_INTERVALS)[number]
 
+/** Values of the `kledg_plan` metadata of the Stripe products. */
+export const PRODUCT_KINDS = ['essentiel', 'holding', 'cabinet', 'cabinet_extra_company', 'dedicated_database'] as const
+export type ProductKind = (typeof PRODUCT_KINDS)[number]
+
 export interface Plan {
   id: PlanId
   /** Shown to customers (French). */
   name: string
   /** One sentence for the plan picker (French). */
   description: string
-  /** Companies the account may own, null for no limit. */
+  /** Companies the account may own, null for no hard limit. */
   companyLimit: number | null
-  /** Environment variables holding the Stripe price id of each interval. */
-  priceEnv: Record<BillingInterval, string>
+  /** Companies included before extra companies are billed (Cabinet). */
+  includedCompanies: number | null
 }
 
 export const PLANS: Readonly<Record<PlanId, Plan>> = {
@@ -36,59 +43,48 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     name: 'Essentiel',
     description: 'Une société, toute la comptabilité.',
     companyLimit: 1,
-    priceEnv: { month: 'STRIPE_PRICE_ESSENTIEL_MONTHLY', year: 'STRIPE_PRICE_ESSENTIEL_YEARLY' },
+    includedCompanies: null,
   },
   holding: {
     id: 'holding',
     name: 'Holding',
     description: "Jusqu'à cinq sociétés : une holding et ses filiales.",
     companyLimit: 5,
-    priceEnv: { month: 'STRIPE_PRICE_HOLDING_MONTHLY', year: 'STRIPE_PRICE_HOLDING_YEARLY' },
+    includedCompanies: null,
   },
   cabinet: {
     id: 'cabinet',
     name: 'Cabinet',
-    description: 'Pour les experts-comptables : les sociétés de vos clients.',
-    companyLimit: 100,
-    priceEnv: { month: 'STRIPE_PRICE_CABINET_MONTHLY', year: 'STRIPE_PRICE_CABINET_YEARLY' },
+    description: 'Pour les experts-comptables : 25 sociétés incluses, chaque société en plus facturée à part.',
+    companyLimit: null,
+    includedCompanies: 25,
   },
 }
 
-type Env = Record<string, string | undefined>
-
-/** A Stripe price id as Stripe issues them (price_...). Anything else in the variable is ignored. */
-const PRICE_ID = /^price_[A-Za-z0-9]{8,255}$/
-
-/** The Stripe price of `plan` for `interval`, or null when it is not configured. */
-export function priceIdFor(plan: PlanId, interval: BillingInterval, env: Env = process.env): string | null {
-  const value = env[PLANS[plan].priceEnv[interval]]?.trim()
-  return value && PRICE_ID.test(value) ? value : null
+/** Lookup key of the Stripe price of `kind` billed every `interval` (kledg_holding_yearly...). */
+export function lookupKey(kind: ProductKind, interval: BillingInterval): string {
+  return `kledg_${kind}_${interval === 'month' ? 'monthly' : 'yearly'}`
 }
 
-/** The plan a Stripe price belongs to (any interval), or null for a price this instance does not sell. */
-export function planOfPrice(priceId: string | null | undefined, env: Env = process.env): PlanId | null {
-  if (!priceId) return null
-  for (const plan of PLAN_IDS) {
-    for (const interval of BILLING_INTERVALS) {
-      if (priceIdFor(plan, interval, env) === priceId) return plan
-    }
-  }
-  return null
-}
+/** Every lookup key the service sells (10: the most Stripe resolves in one list call). */
+export const ALL_LOOKUP_KEYS: readonly string[] = PRODUCT_KINDS.flatMap((kind) => BILLING_INTERVALS.map((interval) => lookupKey(kind, interval)))
 
 export function isPlanId(value: unknown): value is PlanId {
   return typeof value === 'string' && (PLAN_IDS as readonly string[]).includes(value)
 }
 
-/** The plans offered at checkout: those with at least one configured price, with their intervals. */
-export function offeredPlans(env: Env = process.env): Array<Plan & { intervals: BillingInterval[] }> {
-  return PLAN_IDS.map((id) => ({ ...PLANS[id], intervals: BILLING_INTERVALS.filter((i) => priceIdFor(id, i, env)) })).filter(
-    (plan) => plan.intervals.length > 0,
-  )
+export function isProductKind(value: unknown): value is ProductKind {
+  return typeof value === 'string' && (PRODUCT_KINDS as readonly string[]).includes(value)
 }
 
-/** "1 société", "5 sociétés", "un nombre illimité de sociétés". */
-export function companyLimitLabel(limit: number | null): string {
-  if (limit === null) return 'un nombre illimité de sociétés'
+/** Billed extra companies of a Cabinet account owning `count` companies. */
+export function extraCompaniesFor(plan: PlanId | null, count: number): number {
+  const included = plan ? PLANS[plan].includedCompanies : null
+  return included === null ? 0 : Math.max(0, count - included)
+}
+
+/** "1 société", "5 sociétés", "25 sociétés incluses". */
+export function companyLimitLabel(limit: number | null, included: number | null = null): string {
+  if (limit === null) return included ? `${included} sociétés incluses, puis à l'unité` : 'un nombre illimité de sociétés'
   return limit === 1 ? '1 société' : `${limit} sociétés`
 }

@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event'
 const data = vi.hoisted(() => ({
   terms: [] as string[],
   account: null as null | Record<string, unknown>,
+  member: false,
 }))
 
 vi.mock('@/lib/cloud/legal/terms-acceptance.service', () => ({ pendingTerms: vi.fn(async () => data.terms) }))
@@ -18,7 +19,9 @@ vi.mock('@/lib/cloud/billing/billing-account.service', async () => {
   const { billingAccess } = await import('@/lib/cloud/billing/state')
   return {
     findBillingAccount: vi.fn(async () => data.account),
-    accessOf: (account: Parameters<typeof billingAccess>[0], now: Date) => billingAccess(account, now, { graceDays: 14, trialCompanyLimit: 3 }),
+    belongsToAnyCompany: vi.fn(async () => data.member),
+    virtualBillingAccount: () => ({ subscriptionStatus: null, planId: null, deletionScheduledFor: null, deletionReason: null }),
+    accessOf: (account: Parameters<typeof billingAccess>[0], now: Date) => billingAccess(account, now, { graceDays: 14, retrievalDays: 30 }),
   }
 })
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }))
@@ -34,6 +37,7 @@ beforeEach(() => {
   vi.stubEnv('KLEDG_CLOUD_MODE', 'true')
   data.terms = []
   data.account = null
+  data.member = false
 })
 
 afterEach(() => {
@@ -63,33 +67,42 @@ describe('cloud slots', () => {
 
 describe('cloud banner', () => {
   it('asks to accept new terms first', async () => {
-    data.terms = ['cgu']
+    data.terms = ['cgv']
     render(await CloudBanner({ user, now }))
-    expect(screen.getByRole('status')).toHaveTextContent('évoluent. Lisez-les et acceptez-les pour continuer à utiliser Kledg.')
+    expect(screen.getByRole('status')).toHaveTextContent('évoluent (version 1.0). Lisez-les et acceptez-les pour continuer à utiliser Kledg.')
+    expect(screen.getByRole('link', { name: 'conditions générales de vente' })).toHaveAttribute('href', 'https://www.kledg.com/fr/terms')
     expect(screen.getByRole('button', { name: "J'accepte" })).toBeInTheDocument()
   })
 
-  it('shows the trial, with the link to the plans', async () => {
+  it('tells a new user how to start, then shows the trial', async () => {
+    render(await CloudBanner({ user, now }))
+    expect(screen.getByRole('status')).toHaveTextContent('Essai gratuit de 30 jours, sans carte bancaire : choisissez une offre pour créer votre première société.')
+    expect(screen.getByRole('link', { name: 'Choisir une offre' })).toHaveAttribute('href', '/settings/billing')
+  })
+
+  it('shows the trial days left', async () => {
     data.account = {
-      trialEndsAt: new Date('2026-11-20T09:00:00Z'),
-      subscriptionStatus: null,
-      planId: null,
+      trialEnd: new Date('2026-11-20T09:00:00Z'),
+      subscriptionStatus: 'trialing',
+      planId: 'holding',
       currentPeriodEnd: null,
       cancelAtPeriodEnd: false,
       subscriptionEndedAt: null,
       paymentFailedAt: null,
       deletionScheduledFor: null,
+      deletionReason: null,
     }
     render(await CloudBanner({ user, now }))
     expect(screen.getByRole('status')).toHaveTextContent('Essai gratuit : il vous reste 10 jours.')
-    expect(screen.getByRole('link', { name: 'Choisir une offre' })).toHaveAttribute('href', '/settings/billing')
+    expect(screen.getByRole('link', { name: 'Gérer mon abonnement' })).toHaveAttribute('href', '/settings/billing')
   })
 
-  it('shows nothing to a member without an account, an active subscriber or the operator', async () => {
+  it('shows nothing to a member invited elsewhere, an active subscriber or the operator', async () => {
+    data.member = true
     expect(await CloudBanner({ user, now })).toBeNull()
-    data.account = { trialEndsAt: now, subscriptionStatus: 'active', planId: 'holding', cancelAtPeriodEnd: false, deletionScheduledFor: null }
+    data.account = { subscriptionStatus: 'active', planId: 'holding', cancelAtPeriodEnd: false, deletionScheduledFor: null, deletionReason: null }
     expect(await CloudBanner({ user, now })).toBeNull()
-    data.terms = ['cgu', 'cgv']
+    data.terms = ['cgv']
     expect(await CloudBanner({ user: { ...user, role: 'admin' }, now })).toBeNull()
   })
 })
@@ -99,7 +112,7 @@ describe('sign-up form', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 202 }))
     vi.stubGlobal('fetch', fetchMock)
     const ui = userEvent.setup()
-    render(<SignupForm termsVersion="cgu:2026-10-20,cgv:2026-10-20" trialDays={30} />)
+    render(<SignupForm termsVersion="cgv:1.0" cgvVersion="1.0" trialDays={30} />)
     expect(screen.getByText(/30 jours d'essai gratuit, sans carte bancaire/)).toBeInTheDocument()
     await ui.type(screen.getByLabelText('Email'), 'claire@societe.fr')
     await ui.type(screen.getByLabelText('Mot de passe'), 'un-mot-de-passe-solide')
@@ -115,7 +128,7 @@ describe('sign-up form', () => {
       name: '',
       password: 'un-mot-de-passe-solide',
       acceptTerms: true,
-      termsVersion: 'cgu:2026-10-20,cgv:2026-10-20',
+      termsVersion: 'cgv:1.0',
       website: '',
     })
   })
@@ -123,7 +136,7 @@ describe('sign-up form', () => {
   it('shows the French error of the server', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Trop de demandes pour cette adresse. Réessayez dans une heure.' }), { status: 429 })))
     const ui = userEvent.setup()
-    render(<SignupForm termsVersion="v" trialDays={30} />)
+    render(<SignupForm termsVersion="v" cgvVersion="1.0" trialDays={30} />)
     await ui.type(screen.getByLabelText('Email'), 'claire@societe.fr')
     await ui.type(screen.getByLabelText('Mot de passe'), 'un-mot-de-passe-solide')
     await ui.click(screen.getByRole('checkbox'))

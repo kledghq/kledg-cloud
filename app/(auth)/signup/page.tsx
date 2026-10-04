@@ -1,7 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/session'
 import { cloudSettings, isCloudMode } from '@/lib/cloud/config'
-import { currentTermsVersion } from '@/lib/cloud/legal/terms'
+import { CURRENT_TERMS, currentTermsVersion } from '@/lib/cloud/legal/terms'
 import { SignupForm } from '@/components/cloud/signup-form'
 
 export const dynamic = 'force-dynamic'
@@ -12,5 +12,5 @@ export const metadata = { title: 'Créer un compte' }
 export default async function SignupPage() {
   if (!isCloudMode()) notFound()
   if (await getCurrentUser()) redirect('/')
-  return <SignupForm termsVersion={currentTermsVersion()} trialDays={cloudSettings().trialDays} />
+  return <SignupForm termsVersion={currentTermsVersion()} cgvVersion={CURRENT_TERMS.cgv.version} trialDays={cloudSettings().trialDays} />
 }

@@ -16,8 +16,9 @@
  *   for known and unknown addresses.
  * - A honeypot field: a form filled by a bot gets the usual answer and
  *   creates nothing.
- * - The CGU and CGV must be accepted, in the version currently published;
- *   the acceptance is stored with its version and time.
+ * - The CGV must be accepted, in the version currently published (1.0,
+ *   https://www.kledg.com/fr/terms); the acceptance is stored with its
+ *   version and date.
  * - Closed until the operator's own account exists (first-run setup):
  *   nobody can take the instance before its administrator.
  *
@@ -41,7 +42,6 @@ import { CLOUD_PATHS } from '../config'
 import { accountExistsEmail } from '../email-templates'
 import { currentTermsVersion } from '../legal/terms'
 import { recordTermsAcceptance } from '../legal/terms-acceptance.service'
-import { ensureBillingAccount } from '../billing/billing-account.service'
 
 /** Better Auth's limits (lib/auth.ts: minPasswordLength 10, its default maximum 128). */
 const PASSWORD_MIN = 10
@@ -122,11 +122,8 @@ export async function processSignup(input: SignupInput, now: Date = new Date()):
     return 'exists'
   }
 
-  await prisma.$transaction(async (tx) => {
-    await recordTermsAcceptance(userId, now, tx)
-    // The trial starts at sign-up.
-    await ensureBillingAccount(userId, now, tx)
-  })
+  // The CGV version accepted and its date (the trial itself starts at Checkout, with a plan).
+  await recordTermsAcceptance(userId, now)
   // Better Auth signs the link and calls the verification email hook of lib/auth.ts.
   await auth.api.sendVerificationEmail({ body: { email: input.email, callbackURL: CLOUD_PATHS.signupVerified } })
   return 'created'
