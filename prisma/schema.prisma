@@ -9,6 +9,97 @@ datasource db {
   provider = "postgresql"
 }
 
+// ---------------------------------------------------------------------------
+// Kledg Cloud (the hosted service; this block exists only in kledg-cloud).
+// Tables prefixed cloud_, created by the cloud_* migrations. They refer to
+// Kledg's users and companies by id, without foreign keys, so Kledg's own
+// models stay untouched; lib/cloud removes the rows it owns. docs/cloud.md.
+// ---------------------------------------------------------------------------
+
+/// The paying entity: one per user who owns companies. Holds the trial, the
+/// Stripe customer and subscription (mirrored by the webhook) and a pending
+/// deletion request. lib/cloud/billing/state.ts derives the access from it.
+model CloudBillingAccount {
+  id                    String                  @id @default(cuid())
+  /// The owner (users.id). Members invited to the owner's companies never pay.
+  ownerUserId           String                  @unique
+  stripeCustomerId      String?                 @unique
+  stripeSubscriptionId  String?                 @unique
+  /// Stripe subscription status (active, trialing, past_due, unpaid, canceled...), null without one.
+  subscriptionStatus    String?
+  /// lib/cloud/billing/plans.ts, from the subscription's price.
+  planId                String?
+  priceId               String?
+  trialEndsAt           DateTime
+  currentPeriodEnd      DateTime?
+  cancelAtPeriodEnd     Boolean                 @default(false)
+  subscriptionEndedAt   DateTime?
+  /// First failed payment of the current incident, cleared once paid.
+  paymentFailedAt       DateTime?
+  stripeSyncedAt        DateTime?
+  deletionRequestedAt   DateTime?
+  deletionScheduledFor  DateTime?
+  /// The owner asked to delete the books too (explicit warning acknowledged).
+  deletionIncludesBooks Boolean                 @default(false)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  companies             CloudCompanyOwnership[]
+
+  @@index([deletionScheduledFor])
+  @@map("cloud_billing_accounts")
+}
+
+/// Which billing account owns a company (companies.id): the account of the
+/// user who created it. Companies without a row (created by the operator)
+/// are not billed nor restricted.
+model CloudCompanyOwnership {
+  companyId        String              @id
+  billingAccountId String
+  billingAccount   CloudBillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+  createdAt        DateTime            @default(now())
+
+  @@index([billingAccountId])
+  @@map("cloud_company_ownerships")
+}
+
+/// Books kept after their owner's account was deleted (Code de commerce
+/// art. L123-22: 10 years): the company stays archived until retainUntil,
+/// then the maintenance job purges it.
+model CloudRetainedCompany {
+  companyId   String   @id
+  retainUntil DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([retainUntil])
+  @@map("cloud_retained_companies")
+}
+
+/// Stripe events already applied (webhook idempotency), purged after 90 days.
+model CloudStripeEvent {
+  id          String   @id
+  type        String
+  processedAt DateTime @default(now())
+
+  @@index([processedAt])
+  @@map("cloud_stripe_events")
+}
+
+/// Acceptance of a version of the CGU or CGV (lib/cloud/legal/terms.ts).
+model CloudTermsAcceptance {
+  id         String   @id @default(cuid())
+  userId     String
+  /// "cgu" or "cgv".
+  document   String
+  version    String
+  acceptedAt DateTime @default(now())
+
+  @@unique([userId, document, version])
+  @@index([userId])
+  @@map("cloud_terms_acceptances")
+}
+
+// --------------------------- end of Kledg Cloud ----------------------------
+
 enum CompanyLegalType {
   SARL // Société à Responsabilité Limitée
   SAS // Société par Actions Simplifiée
