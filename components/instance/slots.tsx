@@ -17,6 +17,7 @@ import type { InstanceSettingsLinks, InstanceSettingsPage } from '@/components/l
 import { CLOUD_PATHS, isCloudMode } from '@/lib/cloud/config'
 import { CloudBanner } from '@/components/cloud/cloud-banner'
 import { SignupPrompt } from '@/components/cloud/signup-prompt'
+import { CloudAnalytics } from '@/components/cloud/cloud-analytics'
 
 /** Above the header of every page of the application frame (company and settings pages). */
 export function InstanceBanner({ user }: { user: InstanceActor }) {
@@ -46,11 +47,13 @@ export function CompanyOverlay(props: { user: InstanceActor }) {
 /**
  * At the end of <body> on every page, signed in or not (an analytics or
  * status script of the instance). `nonce` is the page CSP nonce, for a
- * script the slot renders inline. Kledg: nothing, no tracking.
+ * script the slot renders inline. Kledg: nothing, no tracking. Cloud:
+ * Vercel Web Analytics, cookieless, without company names, ids or query
+ * strings in the paths.
  */
 export function InstanceDocumentEnd(props: { nonce?: string }) {
   void props
-  return null
+  return isCloudMode() ? <CloudAnalytics /> : null
 }
 
 /** The user menu entries (and the matching settings links) shown to `user`. */
