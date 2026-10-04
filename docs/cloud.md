@@ -26,7 +26,7 @@ merge from Kledg only conflicts where those two files change:
 
 Everything else is new files: `lib/cloud/**`, `components/cloud/**`,
 `app/api/{signup,billing,cloud}/**`, `app/api/cron/cloud-maintenance`,
-`app/(auth)/signup/**`, `app/(account)/settings/{billing,data,console}`, the
+`app/(auth)/inscription/**`, `app/(account)/settings/{billing,data,console}`, the
 cloud block of `prisma/schema.prisma` and its migration
 `prisma/migrations/20261021090000_cloud_billing`. The few shared files a
 fork must touch are listed in the [repository README](../.github/README.md).
@@ -108,7 +108,8 @@ report, FEC and export keeps working, for every member of the company.
 
 ## Sign-up and security
 
-- Public sign-up at `/signup`: email, password, name, CGV acceptance. The
+- Public sign-up at `/inscription` (Kledg keeps `/signup` as a permanent redirect
+  to its account creation page): email, password, name, CGV acceptance. The
   answer is the same and immediate whether the address has an account or
   not; the work runs after the response. A new address gets a confirmation
   link; an existing one an email saying an account exists. Better Auth's own

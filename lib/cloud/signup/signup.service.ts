@@ -32,7 +32,7 @@ import { waitUntil } from '@vercel/functions'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { withUserContext } from '@/lib/rls/context'
+import { withAnonymousContext, withUserContext } from '@/lib/rls/context'
 import { sendEmail } from '@/lib/email'
 import { getAppUrl } from '@/lib/config'
 import { logger } from '@/lib/logger'
@@ -103,6 +103,12 @@ const isAlreadyExists = (error: unknown) => {
 
 /** The work after the response: create the account and send its link, or tell the owner it exists. */
 export async function processSignup(input: SignupInput, now: Date = new Date()): Promise<SignupOutcome> {
+  // Runs after the response, with no session: anonymous for Better Auth's
+  // tables (like the first-run setup), the new user for its own rows (docs/rls.md).
+  return withAnonymousContext(() => processSignupSteps(input, now))
+}
+
+async function processSignupSteps(input: SignupInput, now: Date): Promise<SignupOutcome> {
   const loginUrl = `${getAppUrl()}/login`
   const existing = await prisma.user.findUnique({ where: { email: input.email }, select: { id: true } })
   if (existing) {

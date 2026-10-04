@@ -55,8 +55,8 @@ export function cloudSettings(env: Env = process.env): CloudSettings {
 
 /** Pages of the hosted service, linked from messages and emails. */
 export const CLOUD_PATHS = {
-  signup: '/signup',
-  signupVerified: '/signup/verified',
+  signup: '/inscription',
+  signupVerified: '/inscription/confirmee',
   billing: '/settings/billing',
   data: '/settings/data',
   console: '/settings/console',

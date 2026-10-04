@@ -120,7 +120,7 @@ describe.skipIf(!available)('public sign-up', () => {
     expect(await prisma.cloudBillingAccount.count({ where: { ownerUserId: user.id } })).toBe(0)
 
     expect(state.emails.map((e) => [e.to, e.subject])).toEqual([['claire.martin@example.test', 'Confirmez votre adresse email Kledg']])
-    expect(state.emails[0].text).toMatch(/http:\/\/localhost:3000\/api\/auth\/verify-email\?token=[^&\s]+&callbackURL=%2Fsignup%2Fverified/)
+    expect(state.emails[0].text).toMatch(/http:\/\/localhost:3000\/api\/auth\/verify-email\?token=[^&\s]+&callbackURL=%2Finscription%2Fconfirmee/)
   })
 
   it('refuses to sign the account in before the address is confirmed, sends the link again, and lets it in after', async () => {

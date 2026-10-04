@@ -24,7 +24,7 @@ Kledg.
 | `lib/cloud/` | billing, plans and state machine, Stripe, sign-up, terms, export, deletion, maintenance, operator console |
 | `components/cloud/` | banner, sign-up form, billing, data and console pages |
 | `app/api/{signup,billing,cloud}/`, `app/api/cron/cloud-maintenance/` | the hosted service's routes |
-| `app/(auth)/signup/`, `app/(account)/settings/{billing,data,console}/` | its pages |
+| `app/(auth)/inscription/`, `app/(account)/settings/{billing,data,console}/` | its pages |
 | `lib/instance/policy.ts`, `components/instance/slots.tsx` | Kledg's extension points, delegating to the above |
 
 Shared files a merge from Kledg may touch: the two extension point files,

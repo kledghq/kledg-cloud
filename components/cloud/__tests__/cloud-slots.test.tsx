@@ -58,7 +58,7 @@ describe('cloud slots', () => {
 
   it('invite to sign up on the login page, only in cloud mode', () => {
     render(LoginExtra({ redirectTo: '/' }))
-    expect(screen.getByRole('link', { name: 'Créer un compte, essai gratuit' })).toHaveAttribute('href', '/signup')
+    expect(screen.getByRole('link', { name: 'Créer un compte, essai gratuit' })).toHaveAttribute('href', '/inscription')
     vi.stubEnv('KLEDG_CLOUD_MODE', '')
     expect(LoginExtra({ redirectTo: '/' })).toBeNull()
     expect(InstanceBanner({ user })).toBeNull()
