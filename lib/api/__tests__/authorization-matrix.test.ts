@@ -162,6 +162,48 @@ async function seedCompany(prefix: 'a' | 'b', name: string, slug: string, siren:
   const rule = await prisma.transactionRule.create({
     data: { companyId: company.id, name: 'Règle', entryLines: { create: [{ accountCode: '706000', lineType: 'auto', amountType: 'full', order: 0 }] } },
   })
+  // Expense reports: the viewer's (company A) or the member's (company B) claimant, a report in each state, a free claimant and a category rule
+  const claimant = await prisma.expenseClaimant.create({
+    data: { companyId: company.id, kind: 'EMPLOYEE', name: `Salarié ${prefix}`, userId: prefix === 'a' ? 'u-viewer' : 'u-member-b', auxiliaryAccountNumber: 'S00001' },
+  })
+  const freeClaimant = await prisma.expenseClaimant.create({ data: { companyId: company.id, kind: 'ASSOCIE', name: `Associé ${prefix}`, auxiliaryAccountNumber: 'A00001' } })
+  const expenseReport = (number: string, status: 'DRAFT' | 'SUBMITTED' | 'VALIDATED') =>
+    prisma.expenseReport.create({
+      data: {
+        companyId: company.id,
+        claimantId: claimant.id,
+        number,
+        status,
+        periodStart: new Date('2026-03-01T00:00:00Z'),
+        periodEnd: new Date('2026-03-31T00:00:00Z'),
+        totalInclTax: 120,
+        recoverableVat: 20,
+        totalExpense: 100,
+        lines: { create: [{ position: 1, date: new Date('2026-03-10T00:00:00Z'), label: 'Fournitures', category: 'SUPPLIES', accountCode: '706000', amountInclTax: 120, vatRateBp: 2000, vatAmount: 20, recoverableVat: 20, receiptKind: 'INVOICE' }] },
+      },
+    })
+  const draftReport = await expenseReport('NDF-0001', 'DRAFT')
+  const submittedReport = await expenseReport('NDF-0002', 'SUBMITTED')
+  const validatedReport = await expenseReport('NDF-0003', 'VALIDATED')
+  const expenseRule = await prisma.expenseCategoryRule.create({ data: { companyId: company.id, keyword: 'sncf', category: 'TRANSPORT' } })
+  Object.assign(ids, {
+    [`${prefix}DraftReport`]: draftReport.id,
+    [`${prefix}SubmittedReport`]: submittedReport.id,
+    [`${prefix}ValidatedReport`]: validatedReport.id,
+    [`${prefix}FreeClaimant`]: freeClaimant.id,
+    [`${prefix}ExpenseRule`]: expenseRule.id,
+  })
+  // Budget of the fiscal year, with a line
+  const budget = await prisma.budget.create({
+    data: { companyId: company.id, fiscalYearId: fy.id, lines: { create: [{ accountPrefix: '706', label: 'Prestations de services', amounts: { create: [{ month: '2026-01', amount: 1000 }] } }] } },
+    include: { lines: true },
+  })
+  Object.assign(ids, { [`${prefix}Budget`]: budget.id, [`${prefix}BudgetLine`]: budget.lines[0].id })
+  // Management fees: a convention without subsidiary, so no other company is involved in the role checks
+  const feeConvention = await prisma.managementFeeConvention.create({
+    data: { companyId: company.id, label: 'Convention', costAccountPrefixes: ['6'], excludedAccountPrefixes: ['695'], startDate: new Date('2026-01-01T00:00:00Z') },
+  })
+  ids[`${prefix}FeeConvention`] = feeConvention.id
   const fixedAsset = await prisma.fixedAsset.create({
     data: {
       companyId: company.id,
@@ -365,6 +407,27 @@ const ROUTE_MODULES = {
   invoiceAttachment: () => import('@/app/api/invoices/[id]/attachment/route'),
   invoicesImportQonto: () => import('@/app/api/invoices/import-qonto/route'),
   vatSettings: () => import('@/app/api/companies/[id]/vat-settings/route'),
+  expenseReports: () => import('@/app/api/expense-reports/route'),
+  expenseReport: () => import('@/app/api/expense-reports/[id]/route'),
+  expenseWorkflow: () => import('@/app/api/expense-reports/[id]/workflow/route'),
+  expensePost: () => import('@/app/api/expense-reports/[id]/post/route'),
+  expenseReimbursement: () => import('@/app/api/expense-reports/[id]/reimbursement/route'),
+  expenseReceipts: () => import('@/app/api/expense-reports/receipts/route'),
+  expenseClaimants: () => import('@/app/api/expense-claimants/route'),
+  expenseClaimant: () => import('@/app/api/expense-claimants/[id]/route'),
+  expenseClaimantOptions: () => import('@/app/api/expense-claimants/options/route'),
+  expenseRules: () => import('@/app/api/expense-category-rules/route'),
+  expenseRule: () => import('@/app/api/expense-category-rules/[id]/route'),
+  budgets: () => import('@/app/api/budgets/route'),
+  budget: () => import('@/app/api/budgets/[id]/route'),
+  budgetLines: () => import('@/app/api/budgets/[id]/lines/route'),
+  budgetReport: () => import('@/app/api/budgets/[id]/report/route'),
+  budgetLine: () => import('@/app/api/budget-lines/[id]/route'),
+  feeConventions: () => import('@/app/api/management-fees/conventions/route'),
+  feeConvention: () => import('@/app/api/management-fees/conventions/[id]/route'),
+  feePreview: () => import('@/app/api/management-fees/conventions/[id]/preview/route'),
+  feeInvoices: () => import('@/app/api/management-fees/conventions/[id]/invoices/route'),
+  feeSubsidiaries: () => import('@/app/api/management-fees/subsidiaries/route'),
 }
 
 interface Call {
@@ -516,6 +579,28 @@ const WRITES: Call[] = [
   { label: 'import invoices from Qonto', route: 'invoicesImportQonto', method: 'POST', path: () => '/api/invoices/import-qonto', body: () => ({ companyId: A() }) },
   { label: 'update VAT settings', route: 'vatSettings', method: 'PUT', path: () => `/api/companies/${A()}/vat-settings`, params: p({ id: A }), body: () => ({ servicesVatOnDebits: true }) },
   { label: 'book opening balances', route: 'openingBalances', method: 'POST', path: () => `/api/companies/${A()}/opening-balances`, params: p({ id: A }), body: () => ({ lines: [{ accountCode: '512000', debitCents: 10_000, creditCents: 0 }, { accountCode: '471000', debitCents: 0, creditCents: 10_000 }] }) },
+  { label: 'validate expense report', route: 'expenseWorkflow', method: 'POST', path: () => `/api/expense-reports/${ids.aSubmittedReport}/workflow`, params: p({ id: () => ids.aSubmittedReport }), body: () => ({ action: 'validate' }) },
+  { label: 'return expense report', route: 'expenseWorkflow', method: 'POST', path: () => `/api/expense-reports/${ids.aSubmittedReport}/workflow`, params: p({ id: () => ids.aSubmittedReport }), body: () => ({ action: 'return', note: 'Joindre la facture' }) },
+  { label: 'post expense report', route: 'expensePost', method: 'POST', path: () => `/api/expense-reports/${ids.aValidatedReport}/post`, params: p({ id: () => ids.aValidatedReport }) },
+  { label: 'unpost expense report', route: 'expensePost', method: 'DELETE', path: () => `/api/expense-reports/${ids.aValidatedReport}/post`, params: p({ id: () => ids.aValidatedReport }) },
+  { label: 'expense reimbursement candidates', route: 'expenseReimbursement', method: 'GET', path: () => `/api/expense-reports/${ids.aValidatedReport}/reimbursement`, params: p({ id: () => ids.aValidatedReport }) },
+  { label: 'reimburse expense report', route: 'expenseReimbursement', method: 'POST', path: () => `/api/expense-reports/${ids.aValidatedReport}/reimbursement`, params: p({ id: () => ids.aValidatedReport }), body: () => ({ entryLineIds: ['none'] }) },
+  { label: 'create expense claimant', route: 'expenseClaimants', method: 'POST', path: () => '/api/expense-claimants', body: () => ({ companyId: A(), kind: 'DIRIGEANT', name: 'Dirigeant' }) },
+  { label: 'update expense claimant', route: 'expenseClaimant', method: 'PATCH', path: () => `/api/expense-claimants/${ids.aFreeClaimant}`, params: p({ id: () => ids.aFreeClaimant }), body: () => ({ accountCode: '4551' }) },
+  { label: 'delete expense claimant', route: 'expenseClaimant', method: 'DELETE', path: () => `/api/expense-claimants/${ids.aFreeClaimant}`, params: p({ id: () => ids.aFreeClaimant }) },
+  { label: 'expense claimant options', route: 'expenseClaimantOptions', method: 'GET', path: () => `/api/expense-claimants/options?companyId=${A()}` },
+  { label: 'create expense category rule', route: 'expenseRules', method: 'POST', path: () => '/api/expense-category-rules', body: () => ({ companyId: A(), keyword: 'uber', category: 'TRANSPORT' }) },
+  { label: 'update expense category rule', route: 'expenseRule', method: 'PATCH', path: () => `/api/expense-category-rules/${ids.aExpenseRule}`, params: p({ id: () => ids.aExpenseRule }), body: () => ({ priority: 2 }) },
+  { label: 'delete expense category rule', route: 'expenseRule', method: 'DELETE', path: () => `/api/expense-category-rules/${ids.aExpenseRule}`, params: p({ id: () => ids.aExpenseRule }) },
+  { label: 'create budget', route: 'budgets', method: 'POST', path: () => '/api/budgets', body: () => ({ companyId: A(), fiscalYearId: ids.aFy }) },
+  { label: 'delete budget', route: 'budget', method: 'DELETE', path: () => `/api/budgets/${ids.aBudget}`, params: p({ id: () => ids.aBudget }) },
+  { label: 'create budget line', route: 'budgetLines', method: 'POST', path: () => `/api/budgets/${ids.aBudget}/lines`, params: p({ id: () => ids.aBudget }), body: () => ({ accountPrefix: '6064' }) },
+  { label: 'update budget line', route: 'budgetLine', method: 'PATCH', path: () => `/api/budget-lines/${ids.aBudgetLine}`, params: p({ id: () => ids.aBudgetLine }), body: () => ({ amounts: [{ month: '2026-02', amountCents: 5_000 }] }) },
+  { label: 'delete budget line', route: 'budgetLine', method: 'DELETE', path: () => `/api/budget-lines/${ids.aBudgetLine}`, params: p({ id: () => ids.aBudgetLine }) },
+  { label: 'create management fee convention', route: 'feeConventions', method: 'POST', path: () => '/api/management-fees/conventions', body: () => ({ companyId: A(), label: 'Convention', startDate: '2026-01-01', subsidiaries: [] }) },
+  { label: 'update management fee convention', route: 'feeConvention', method: 'PATCH', path: () => `/api/management-fees/conventions/${ids.aFeeConvention}`, params: p({ id: () => ids.aFeeConvention }), body: () => ({ label: 'Convention', startDate: '2026-01-01', subsidiaries: [] }) },
+  { label: 'delete management fee convention', route: 'feeConvention', method: 'DELETE', path: () => `/api/management-fees/conventions/${ids.aFeeConvention}`, params: p({ id: () => ids.aFeeConvention }) },
+  { label: 'invoice management fees', route: 'feeInvoices', method: 'POST', path: () => `/api/management-fees/conventions/${ids.aFeeConvention}/invoices`, params: p({ id: () => ids.aFeeConvention }), body: () => ({ periodStart: '2026-01-01', periodEnd: '2026-03-31' }) },
 ]
 
 /** Reads of company A (viewer: allowed, non-member: 404, anonymous: 401). */
@@ -584,6 +669,18 @@ const READS: Call[] = [
   { label: 'deadlines of a fiscal year', route: 'deadlines', method: 'GET', path: () => `/api/deadlines?companyId=${A()}&fiscalYearId=${ids.aFy}` },
   { label: 'deadline settings', route: 'deadlineSettings', method: 'GET', path: () => `/api/companies/${A()}/deadline-settings`, params: p({ id: A }) },
   { label: 'dashboard deadlines widget', route: 'dashboardWidgets', method: 'GET', path: () => `/api/dashboard/widgets?companyId=${A()}&source=deadlines` },
+  { label: 'list expense reports', route: 'expenseReports', method: 'GET', path: () => `/api/expense-reports?companyId=${A()}` },
+  { label: 'read own expense report', route: 'expenseReport', method: 'GET', path: () => `/api/expense-reports/${ids.aDraftReport}`, params: p({ id: () => ids.aDraftReport }) },
+  { label: 'list expense claimants', route: 'expenseClaimants', method: 'GET', path: () => `/api/expense-claimants?companyId=${A()}` },
+  { label: 'list expense category rules', route: 'expenseRules', method: 'GET', path: () => `/api/expense-category-rules?companyId=${A()}` },
+  { label: 'list expense receipts', route: 'expenseReceipts', method: 'GET', path: () => `/api/expense-reports/receipts?companyId=${A()}` },
+  { label: 'list budgets', route: 'budgets', method: 'GET', path: () => `/api/budgets?companyId=${A()}` },
+  { label: 'read budget', route: 'budget', method: 'GET', path: () => `/api/budgets/${ids.aBudget}`, params: p({ id: () => ids.aBudget }) },
+  { label: 'budget against the books', route: 'budgetReport', method: 'GET', path: () => `/api/budgets/${ids.aBudget}/report`, params: p({ id: () => ids.aBudget }) },
+  { label: 'list management fee conventions', route: 'feeConventions', method: 'GET', path: () => `/api/management-fees/conventions?companyId=${A()}` },
+  { label: 'read management fee convention', route: 'feeConvention', method: 'GET', path: () => `/api/management-fees/conventions/${ids.aFeeConvention}`, params: p({ id: () => ids.aFeeConvention }) },
+  { label: 'list management fee invoices', route: 'feeInvoices', method: 'GET', path: () => `/api/management-fees/conventions/${ids.aFeeConvention}/invoices`, params: p({ id: () => ids.aFeeConvention }) },
+  { label: 'list subsidiaries of a holding', route: 'feeSubsidiaries', method: 'GET', path: () => `/api/management-fees/subsidiaries?companyId=${A()}` },
 ]
 
 /** What the accountant must not do. */
@@ -885,6 +982,45 @@ describe.skipIf(!available)('authorization matrix', () => {
       expect((await call('accountant', appearance('PUT', { palette: 'neon' }))).status).toBe(400)
       expect((await read('viewer')).appearance.palette).toBe('custom')
       expect(await prisma.userPreference.count({ where: { userId: 'u-accountant' } })).toBe(0)
+    })
+  })
+
+  describe('own expense reports (expenses:submit, every role)', () => {
+    beforeAll(reseed)
+    const lines = [{ date: '2026-03-10', label: 'Fournitures', category: 'SUPPLIES', amountInclTaxCents: 2_400, vatRateBp: 2000, receiptKind: 'INVOICE' }]
+    const OWN: Call[] = [
+      { label: 'create own expense report', route: 'expenseReports', method: 'POST', path: () => '/api/expense-reports', body: () => ({ companyId: A(), periodStart: '2026-03-01', periodEnd: '2026-03-31', lines }) },
+      { label: 'update own draft', route: 'expenseReport', method: 'PATCH', path: () => `/api/expense-reports/${ids.aDraftReport}`, params: p({ id: () => ids.aDraftReport }), body: () => ({ periodStart: '2026-03-01', periodEnd: '2026-03-31', lines }) },
+      { label: 'submit own draft', route: 'expenseWorkflow', method: 'POST', path: () => `/api/expense-reports/${ids.aDraftReport}/workflow`, params: p({ id: () => ids.aDraftReport }), body: () => ({ action: 'submit' }) },
+    ]
+
+    it.each(OWN.map((c) => [c.label, c] as const))('%s: anonymous 401, member of B 404', async (_label, c) => {
+      expect((await call('anonymous', c)).status).toBe(401)
+      expect((await call('memberB', c)).status).toBe(404)
+    })
+
+    it('a viewer records, edits and submits their own report, never validates it', async () => {
+      const [create, update, submit] = OWN
+      expect((await call('viewer', create)).status).toBe(201)
+      expect((await call('viewer', update)).status).toBe(200)
+      expect((await call('viewer', submit)).status).toBe(200)
+      const validate = await call('viewer', { ...submit, body: () => ({ action: 'validate' }) })
+      expect(validate.status).toBe(403)
+      expect((await prisma.expenseReport.findUniqueOrThrow({ where: { id: ids.aDraftReport } })).status).toBe('SUBMITTED')
+    })
+
+    it("a viewer never reaches another person's report; a validator does", async () => {
+      const own = await prisma.expenseClaimant.findFirstOrThrow({ where: { userId: 'u-viewer' } })
+      await prisma.expenseClaimant.update({ where: { id: own.id }, data: { userId: 'u-accountant' } })
+      try {
+        const read: Call = { label: 'read', route: 'expenseReport', method: 'GET', path: () => `/api/expense-reports/${ids.aValidatedReport}`, params: p({ id: () => ids.aValidatedReport }) }
+        expect((await call('viewer', read)).status).toBe(404)
+        expect((await call('accountant', read)).status).toBe(200)
+        const list = await call('viewer', { label: 'list', route: 'expenseReports', method: 'GET', path: () => `/api/expense-reports?companyId=${A()}` })
+        expect(((await list.json()) as { items: unknown[] }).items).toEqual([])
+      } finally {
+        await prisma.expenseClaimant.update({ where: { id: own.id }, data: { userId: 'u-viewer' } })
+      }
     })
   })
 

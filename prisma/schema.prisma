@@ -237,6 +237,14 @@ model Company {
   dashboardLayouts           DashboardLayout[]
   tiers                      Tiers[]
   invoices                   Invoice[]
+  expenseClaimants           ExpenseClaimant[]
+  expenseReports             ExpenseReport[]
+  expenseCategoryRules       ExpenseCategoryRule[]
+  budgets                    Budget[]
+  managementFeeConventions   ManagementFeeConvention[]
+  managementFeeSubsidiaryOf  ManagementFeeSubsidiary[]
+  managementFeeBillings      ManagementFeeBilling[]      @relation("ManagementFeeBillingHolding")
+  managementFeeBilled        ManagementFeeBilling[]      @relation("ManagementFeeBillingSubsidiary")
 
   @@index([addressId])
   @@index([headquartersAddressId])
@@ -327,8 +335,11 @@ model FiscalYear {
   accounts                Account[]                @relation("FiscalYearAccounts")
   accountingEntries       AccountingEntry[]
   fixedAssetDepreciations FixedAssetDepreciation[]
+  budget                  Budget?
 
   @@unique([companyId, year])
+  /// Target of composite foreign keys that keep a child row in the company of its fiscal year (budgets).
+  @@unique([id, companyId])
   @@index([companyId])
   @@index([startDate, endDate])
   @@map("fiscal_years")
@@ -412,6 +423,7 @@ model AccountingEntry {
   reversalOf              AccountingEntry?         @relation("EntryReversal", fields: [reversalOfId], references: [id], onDelete: NoAction)
   reversedBy              AccountingEntry?         @relation("EntryReversal")
   invoice                 Invoice?                 @relation("InvoiceEntry")
+  expenseReport           ExpenseReport?           @relation("ExpenseReportEntry")
   vatTransfers            InvoicePayment[]         @relation("InvoicePaymentVatTransfer")
   // Tous les comptes d'une écriture doivent appartenir au même exercice fiscal
 
@@ -1010,10 +1022,11 @@ model Person {
   updatedAt       DateTime  @updatedAt
 
   // Relations
-  address      Address?      @relation(fields: [addressId], references: [id], onDelete: SetNull)
-  shareholders Shareholder[] // Link to shareholders (type PHYSICAL)
-  company      Company?      @relation(fields: [companyId], references: [id])
-  companyId    String?
+  address          Address?          @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  shareholders     Shareholder[] // Link to shareholders (type PHYSICAL)
+  expenseClaimants ExpenseClaimant[]
+  company          Company?          @relation(fields: [companyId], references: [id])
+  companyId        String?
 
   @@unique([companyId, email])
   @@index([email])
@@ -1045,6 +1058,7 @@ model Attachment {
   company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration     Integration?     @relation(fields: [integrationId], references: [id], onDelete: SetNull)
   bankTransaction BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: SetNull)
+  expenseLines    ExpenseLine[]
 
   @@unique([integrationId, externalAttachmentId])
   @@index([companyId])
@@ -1223,6 +1237,7 @@ model User {
   mcpPendingActions McpPendingAction[]
   dashboardLayouts  DashboardLayout[]
   preference        UserPreference?
+  expenseClaimants  ExpenseClaimant[]
 
   @@unique([email])
   @@map("user")
@@ -1833,12 +1848,14 @@ model Invoice {
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
-  company      Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  tiers        Tiers                 @relation(fields: [tiersId], references: [id], onDelete: Restrict)
-  entry        AccountingEntry?      @relation("InvoiceEntry", fields: [entryId], references: [id], onDelete: SetNull)
-  lines        InvoiceLine[]
-  vatBreakdown InvoiceVatBreakdown[]
-  payments     InvoicePayment[]
+  company               Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tiers                 Tiers                 @relation(fields: [tiersId], references: [id], onDelete: Restrict)
+  entry                 AccountingEntry?      @relation("InvoiceEntry", fields: [entryId], references: [id], onDelete: SetNull)
+  lines                 InvoiceLine[]
+  vatBreakdown          InvoiceVatBreakdown[]
+  payments              InvoicePayment[]
+  managementFeeSale     ManagementFeeBilling? @relation("ManagementFeeSalesInvoice")
+  managementFeePurchase ManagementFeeBilling? @relation("ManagementFeePurchaseInvoice")
 
   @@unique([companyId, direction, tiersId, number])
   @@unique([companyId, source, externalId])
@@ -1909,4 +1926,355 @@ model InvoicePayment {
   @@index([invoiceId])
   @@index([vatTransferEntryId])
   @@map("invoice_payments")
+}
+
+enum ExpenseClaimantKind {
+  EMPLOYEE // Salarié : compte 421 par défaut
+  DIRIGEANT // Dirigeant non associé : compte 467 par défaut
+  ASSOCIE // Associé (dirigeant ou non) : compte courant 455 par défaut
+}
+
+enum ExpenseReportStatus {
+  DRAFT // Brouillon : modifiable par son auteur
+  SUBMITTED // Soumise : attend la validation
+  VALIDATED // Validée : prête à comptabiliser (comptabilisée et remboursée se déduisent de l'écriture)
+}
+
+enum ExpenseLineKind {
+  EXPENSE // Dépense avec un justificatif
+  MILEAGE // Indemnité kilométrique (barème, sans TVA)
+}
+
+enum ExpenseReceiptKind {
+  NONE // Aucun justificatif
+  RECEIPT // Ticket ou facture simplifiée (150 € HT au plus)
+  INVOICE // Facture au nom de la société
+}
+
+/// A person the company reimburses expenses to: an employee, a dirigeant or
+/// an associé, linked to a Person of the company or to a member (user).
+/// Its account is credited with what the company owes (421, 455, 467 by
+/// kind, or the code set here) with its auxiliary account number, so that
+/// lettering pairs a report with its reimbursement
+/// (lib/expense-reports/manage-expense-claimants.service.ts).
+model ExpenseClaimant {
+  id                     String              @id @default(cuid())
+  companyId              String
+  kind                   ExpenseClaimantKind
+  name                   String
+  personId               String?
+  userId                 String?
+  /// Account credited by the reports (421..., 455..., 467...); null: the default of the kind.
+  accountCode            String?
+  /// Auxiliary account number (FEC CompAuxNum) on the credited line, unique in the company.
+  auxiliaryAccountNumber String
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  person  Person?         @relation(fields: [personId], references: [id], onDelete: SetNull)
+  user    User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  reports ExpenseReport[]
+
+  @@unique([companyId, auxiliaryAccountNumber])
+  @@unique([companyId, userId])
+  @@unique([companyId, personId])
+  @@index([personId])
+  @@index([userId])
+  @@map("expense_claimants")
+}
+
+/// An expense report (note de frais) of one claimant for one period
+/// (lib/expense-reports). Its amounts are computed from its lines in cents
+/// (lib/expense-reports/amounts.ts). Brouillon, soumise and validée are
+/// stored; comptabilisée (entryId set) and remboursée (the claimant line of
+/// the entry is lettered) are derived.
+model ExpenseReport {
+  id             String              @id @default(cuid())
+  companyId      String
+  claimantId     String
+  /// NDF-0001, NDF-0002... unique in the company.
+  number         String
+  label          String?
+  periodStart    DateTime
+  periodEnd      DateTime
+  status         ExpenseReportStatus @default(DRAFT)
+  /// What the company owes the claimant (TTC of the expenses plus the mileage allowances).
+  totalInclTax   Decimal             @db.Decimal(15, 2)
+  /// VAT the company recovers (44566).
+  recoverableVat Decimal             @db.Decimal(15, 2)
+  /// Charges: totalInclTax minus recoverableVat.
+  totalExpense   Decimal             @db.Decimal(15, 2)
+  createdById    String?
+  submittedAt    DateTime?
+  submittedById  String?
+  validatedAt    DateTime?
+  validatedById  String?
+  /// Why a validator sent the report back to its author.
+  returnNote     String?
+  /// Draft entry created by posting (null: not posted). Deleting that draft brings the report back to validée.
+  entryId        String?             @unique
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  claimant ExpenseClaimant  @relation(fields: [claimantId], references: [id], onDelete: Restrict)
+  entry    AccountingEntry? @relation("ExpenseReportEntry", fields: [entryId], references: [id], onDelete: SetNull)
+  lines    ExpenseLine[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([claimantId])
+  @@map("expense_reports")
+}
+
+/// One expense of a report, or one trip paid by the mileage scale.
+model ExpenseLine {
+  id                  String             @id @default(cuid())
+  reportId            String
+  position            Int
+  kind                ExpenseLineKind    @default(EXPENSE)
+  date                DateTime
+  supplierName        String?
+  label               String
+  /// Category key of lib/expense-reports/categories.ts (default account and VAT rule).
+  category            String
+  /// Expense account; null: the default account of the category.
+  accountCode         String?
+  amountInclTax       Decimal            @db.Decimal(15, 2)
+  /// VAT rate in basis points (2000 = 20 %).
+  vatRateBp           Int                @default(0)
+  /// VAT shown on the receipt.
+  vatAmount           Decimal            @default(0) @db.Decimal(15, 2)
+  /// Part of vatAmount the company recovers (lib/expense-reports/vat-recovery.ts).
+  recoverableVat      Decimal            @default(0) @db.Decimal(15, 2)
+  receiptKind         ExpenseReceiptKind @default(NONE)
+  /// A receipt already in Kledg (a Qonto attachment): Kledg stores no file.
+  receiptAttachmentId String?
+  /// Reference of a paper or emailed receipt kept by the company.
+  receiptReference    String?
+  /// Mileage: CAR, MOTORCYCLE or MOPED, fiscal power, electric (+20 %), distance.
+  vehicleType         String?
+  fiscalPower         Int?
+  electric            Boolean            @default(false)
+  distanceKm          Int?
+  /// Kilometres of the same vehicle already counted in the year before this trip (scale bands are annual).
+  priorDistanceKm     Int?
+  /// Year of the mileage scale applied.
+  scaleYear           Int?
+
+  report            ExpenseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  receiptAttachment Attachment?   @relation(fields: [receiptAttachmentId], references: [id], onDelete: SetNull)
+
+  @@index([reportId])
+  @@index([receiptAttachmentId])
+  @@map("expense_lines")
+}
+
+/// Automatic category of expense lines: a keyword found in the supplier name
+/// or the label gives the category (and optionally the account). Highest
+/// priority first (lib/expense-reports/category-rules.ts).
+model ExpenseCategoryRule {
+  id          String   @id @default(cuid())
+  companyId   String
+  keyword     String
+  category    String
+  accountCode String?
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("expense_category_rules")
+}
+
+/// How often a recurring budget item falls due, from its first month
+/// (lib/budgets/recurring.ts).
+enum BudgetFrequency {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+/// Budget of a fiscal year (docs/budget.md): one per fiscal year, compared
+/// with the validated entries of that year (lib/budgets/budget-report.service.ts).
+model Budget {
+  id           String   @id @default(cuid())
+  companyId    String
+  fiscalYearId String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /// On (fiscalYearId, companyId): the fiscal year is always one of the budget's company.
+  fiscalYear FiscalYear   @relation(fields: [fiscalYearId, companyId], references: [id, companyId], onDelete: Cascade)
+  lines      BudgetLine[]
+
+  /// One budget per fiscal year (a fiscal year belongs to one company).
+  @@unique([fiscalYearId, companyId])
+  @@index([companyId])
+  @@map("budgets")
+}
+
+/// A line of a budget: the class 6 or 7 accounts whose number starts with
+/// `accountPrefix` (an account goes to the line with the longest matching
+/// prefix). A prefix, not an account id: accounts belong to one fiscal year.
+model BudgetLine {
+  id            String   @id @default(cuid())
+  budgetId      String
+  accountPrefix String
+  label         String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  budget         Budget                @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  amounts        BudgetLineAmount[]
+  recurringItems BudgetRecurringItem[]
+
+  @@unique([budgetId, accountPrefix])
+  @@map("budget_lines")
+}
+
+/// Amount entered for one calendar month (`yyyy-mm`) of a budget line.
+model BudgetLineAmount {
+  id     String  @id @default(cuid())
+  lineId String
+  month  String
+  amount Decimal @db.Decimal(15, 2)
+
+  line BudgetLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@unique([lineId, month])
+  @@map("budget_line_amounts")
+}
+
+/// A recurring amount of a budget line (subscription, rent, insurance),
+/// expanded into the months of the fiscal year from `startMonth` to
+/// `endMonth` (inclusive, `yyyy-mm`), added to the amounts entered by month.
+model BudgetRecurringItem {
+  id         String          @id @default(cuid())
+  lineId     String
+  label      String
+  amount     Decimal         @db.Decimal(15, 2)
+  frequency  BudgetFrequency
+  startMonth String
+  endMonth   String?
+  position   Int             @default(0)
+
+  line BudgetLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@index([lineId])
+  @@map("budget_recurring_items")
+}
+
+enum ManagementFeePricing {
+  COST_PLUS // Charges de la holding sur la période, majorées d'une marge
+  FIXED // Montant forfaitaire hors taxes par période
+}
+
+enum ManagementFeeAllocationKey {
+  EQUAL // Parts égales (au prorata des jours de présence dans la convention)
+  REVENUE // Au prorata du chiffre d'affaires (comptes 70) de chaque filiale
+  CUSTOM // Pourcentages fixés par la convention (total 100 %)
+}
+
+/// A management fee agreement (convention de prestations de services, frais
+/// de gestion) of a holding with some of its subsidiaries
+/// (lib/management-fees, docs/frais-de-gestion.md). companyId is the holding:
+/// the company recorded as shareholder (Shareholder.companyShareholderId) of
+/// each subsidiary. Rates are integer basis points (500 = 5 %).
+model ManagementFeeConvention {
+  id                      String                     @id @default(cuid())
+  companyId               String
+  label                   String
+  pricing                 ManagementFeePricing       @default(COST_PLUS)
+  /// Mark-up on the cost base (cost plus, OECD TPG chapter VII), in basis points.
+  markupBp                Int                        @default(500)
+  /// Part of the cost pool spent on services to the subsidiaries (the rest: shareholder activity, not chargeable).
+  costShareBp             Int                        @default(10000)
+  /// Charge accounts in the cost pool, by prefix (["6"]: every class 6 account).
+  costAccountPrefixes     String[]
+  /// Charge accounts left out of the pool, by prefix (income tax, penalties, financial and exceptional charges).
+  excludedAccountPrefixes String[]
+  /// FIXED pricing: amount excluding tax of one period for all the subsidiaries.
+  fixedAmount             Decimal?                   @db.Decimal(15, 2)
+  allocationKey           ManagementFeeAllocationKey @default(EQUAL)
+  /// VAT rate of the invoices, in basis points (2000 = 20 %).
+  vatRateBp               Int                        @default(2000)
+  /// Revenue account of the holding's sales invoices (706 prestations de services).
+  revenueAccountCode      String                     @default("706")
+  /// Expense account proposed on the subsidiaries' purchase invoices.
+  expenseAccountCode      String                     @default("6226")
+  /// Series of the sales invoice numbers: <prefix>-<year>-<sequence>.
+  invoicePrefix           String                     @default("FG")
+  startDate               DateTime
+  endDate                 DateTime?
+  notes                   String?
+  createdAt               DateTime                   @default(now())
+  updatedAt               DateTime                   @updatedAt
+
+  company      Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  subsidiaries ManagementFeeSubsidiary[]
+  billings     ManagementFeeBilling[]
+
+  @@index([companyId])
+  @@map("management_fee_conventions")
+}
+
+/// A subsidiary party to a convention, with its custom share and the days it
+/// is party to it (signature, exit): a subsidiary present part of a period
+/// gets a share prorated by days.
+model ManagementFeeSubsidiary {
+  id             String    @id @default(cuid())
+  conventionId   String
+  subsidiaryId   String
+  /// CUSTOM key: share in basis points (the shares of a convention add up to 10000).
+  sharePercentBp Int?
+  startDate      DateTime?
+  endDate        DateTime?
+  position       Int       @default(0)
+
+  convention ManagementFeeConvention @relation(fields: [conventionId], references: [id], onDelete: Cascade)
+  subsidiary Company                 @relation(fields: [subsidiaryId], references: [id], onDelete: Cascade)
+
+  @@unique([conventionId, subsidiaryId])
+  @@index([subsidiaryId])
+  @@map("management_fee_subsidiaries")
+}
+
+/// The fee of one subsidiary for one period, as invoiced: the amounts of the
+/// holding's sales invoice (computed once, by lib/management-fees/compute.ts,
+/// with the rounding of lib/invoices/amounts.ts) and the draft purchase
+/// invoice proposed to the subsidiary. companyId is the holding.
+model ManagementFeeBilling {
+  id                String   @id @default(cuid())
+  companyId         String
+  conventionId      String
+  subsidiaryId      String
+  periodStart       DateTime
+  periodEnd         DateTime
+  amountExclTax     Decimal  @db.Decimal(15, 2)
+  vatRateBp         Int
+  vatAmount         Decimal  @db.Decimal(15, 2)
+  amountInclTax     Decimal  @db.Decimal(15, 2)
+  /// How the amount was computed (cost pool, mark-up, key and weights), for the transfer pricing file.
+  details           Json
+  salesInvoiceId    String?  @unique
+  purchaseInvoiceId String?  @unique
+  createdById       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company         Company                 @relation("ManagementFeeBillingHolding", fields: [companyId], references: [id], onDelete: Cascade)
+  convention      ManagementFeeConvention @relation(fields: [conventionId], references: [id], onDelete: NoAction)
+  subsidiary      Company                 @relation("ManagementFeeBillingSubsidiary", fields: [subsidiaryId], references: [id], onDelete: Cascade)
+  salesInvoice    Invoice?                @relation("ManagementFeeSalesInvoice", fields: [salesInvoiceId], references: [id], onDelete: SetNull)
+  purchaseInvoice Invoice?                @relation("ManagementFeePurchaseInvoice", fields: [purchaseInvoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([conventionId, subsidiaryId, periodStart, periodEnd])
+  @@index([companyId])
+  @@index([subsidiaryId])
+  @@map("management_fee_billings")
 }

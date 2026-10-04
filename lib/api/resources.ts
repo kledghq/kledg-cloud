@@ -48,6 +48,25 @@ export const companyOfTiers = (id: string): Promise<CompanyRow> =>
 export const companyOfInvoice = (id: string): Promise<CompanyRow> =>
   prisma.invoice.findUnique({ where: { id }, select })
 
+export const companyOfExpenseReport = (id: string): Promise<CompanyRow> =>
+  prisma.expenseReport.findUnique({ where: { id }, select })
+
+export const companyOfExpenseClaimant = (id: string): Promise<CompanyRow> =>
+  prisma.expenseClaimant.findUnique({ where: { id }, select })
+
+export const companyOfExpenseCategoryRule = (id: string): Promise<CompanyRow> =>
+  prisma.expenseCategoryRule.findUnique({ where: { id }, select })
+
+export const companyOfBudget = (id: string): Promise<CompanyRow> =>
+  prisma.budget.findUnique({ where: { id }, select })
+
+export async function companyOfBudgetLine(id: string): Promise<CompanyRow> {
+  const row = await prisma.budgetLine.findUnique({ where: { id }, select: { budget: { select: { companyId: true } } } })
+  return row ? { companyId: row.budget.companyId } : null
+}
+export const companyOfManagementFeeConvention = (id: string): Promise<CompanyRow> =>
+  prisma.managementFeeConvention.findUnique({ where: { id }, select })
+
 export async function companyOfBankAccount(id: string): Promise<CompanyRow> {
   const row = await prisma.bankAccount.findUnique({
     where: { id },

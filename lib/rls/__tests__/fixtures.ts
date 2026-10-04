@@ -293,6 +293,79 @@ export async function seedTenants(prisma: PrismaClient): Promise<SeededKeys> {
         data: { id: id('invoice_payments'), invoiceId: id('invoices'), entryLineId: `${p}-entry-line-2`, amount: 50 },
       })
       record('invoice_payments', p, id('invoice_payments'))
+
+      await prisma.expenseClaimant.create({
+        data: { id: id('expense_claimants'), companyId, kind: 'EMPLOYEE', name: 'Salarie', userId: owner, auxiliaryAccountNumber: `S${p.toUpperCase()}` },
+      })
+      record('expense_claimants', p, id('expense_claimants'))
+      await prisma.expenseReport.create({
+        data: {
+          id: id('expense_reports'),
+          companyId,
+          claimantId: id('expense_claimants'),
+          number: `NDF-${p}`,
+          periodStart: day('2026-03-01'),
+          periodEnd: day('2026-03-31'),
+          totalInclTax: 60,
+          recoverableVat: 10,
+          totalExpense: 50,
+        },
+      })
+      record('expense_reports', p, id('expense_reports'))
+      await prisma.expenseLine.create({
+        data: {
+          id: id('expense_lines'),
+          reportId: id('expense_reports'),
+          position: 1,
+          date: day('2026-03-10'),
+          label: 'Fournitures',
+          category: 'SUPPLIES',
+          amountInclTax: 60,
+          vatRateBp: 2000,
+          vatAmount: 10,
+          recoverableVat: 10,
+          receiptKind: 'INVOICE',
+        },
+      })
+      record('expense_lines', p, id('expense_lines'))
+      await prisma.expenseCategoryRule.create({ data: { id: id('expense_category_rules'), companyId, keyword: 'sncf', category: 'TRANSPORT' } })
+      record('expense_category_rules', p, id('expense_category_rules'))
+
+      await prisma.budget.create({ data: { id: id('budgets'), companyId, fiscalYearId: id('fiscal_years') } })
+      record('budgets', p, id('budgets'))
+      await prisma.budgetLine.create({ data: { id: id('budget_lines'), budgetId: id('budgets'), accountPrefix: '706', label: 'Ventes' } })
+      record('budget_lines', p, id('budget_lines'))
+      await prisma.budgetLineAmount.create({ data: { id: id('budget_line_amounts'), lineId: id('budget_lines'), month: '2026-03', amount: 1000 } })
+      record('budget_line_amounts', p, id('budget_line_amounts'))
+      await prisma.budgetRecurringItem.create({
+        data: { id: id('budget_recurring_items'), lineId: id('budget_lines'), label: 'Abonnement', amount: 50, frequency: 'MONTHLY', startMonth: '2026-01' },
+      })
+      record('budget_recurring_items', p, id('budget_recurring_items'))
+      // Management fees: the company is the holding; company c stands for the subsidiary (only its id is referenced).
+      await prisma.managementFeeConvention.create({
+        data: { id: id('management_fee_conventions'), companyId, label: 'Convention', costAccountPrefixes: ['6'], excludedAccountPrefixes: ['695'], startDate: day('2026-01-01') },
+      })
+      record('management_fee_conventions', p, id('management_fee_conventions'))
+      await prisma.managementFeeSubsidiary.create({
+        data: { id: id('management_fee_subsidiaries'), conventionId: id('management_fee_conventions'), subsidiaryId: COMPANY.c },
+      })
+      record('management_fee_subsidiaries', p, id('management_fee_subsidiaries'))
+      await prisma.managementFeeBilling.create({
+        data: {
+          id: id('management_fee_billings'),
+          companyId,
+          conventionId: id('management_fee_conventions'),
+          subsidiaryId: COMPANY.c,
+          periodStart: day('2026-01-01'),
+          periodEnd: day('2026-03-31'),
+          amountExclTax: 100,
+          vatRateBp: 2000,
+          vatAmount: 20,
+          amountInclTax: 120,
+          details: {},
+        },
+      })
+      record('management_fee_billings', p, id('management_fee_billings'))
     }
     return keys
   })
