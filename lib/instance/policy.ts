@@ -108,3 +108,11 @@ export const INSTANCE_RATE_LIMITS = CLOUD_RATE_LIMITS satisfies Record<string, R
  * Cloud: /signup and /legal.
  */
 export const PUBLIC_PAGES: readonly string[] = isCloudMode() ? CLOUD_PUBLIC_PAGES : []
+
+/**
+ * Where to send a visitor of /setup without the installation link while
+ * the instance has no administrator yet (a hosted service before launch:
+ * its waitlist), instead of the neutral "Installation en cours" page.
+ * Kledg: null, the neutral page. Cloud: the waitlist on the website.
+ */
+export const SETUP_PENDING_REDIRECT: string | null = isCloudMode() ? 'https://www.kledg.com/fr/waitlist' : null
