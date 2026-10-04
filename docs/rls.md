@@ -233,7 +233,7 @@ transactions, and Better Auth (which goes through the same Prisma client).
 | Better Auth (`/api/auth/*`) | derived from the session cookie when there is one, else `anonymous`; its own tables are exempt |
 | Setup (`/setup`) | `anonymous` (only Better Auth tables are written) |
 | Scripts and seeds | `system` with reason `script` (`withSystemContext`) |
-| Kledg Cloud (this fork, [cloud.md](cloud.md)) | `system`, reason `instance-extension`, in `lib/cloud/billing/stripe-webhook.service.ts` (the Stripe webhook, once its signature is checked) and `lib/cloud/maintenance.service.ts` (the daily maintenance, after the `CRON_SECRET` check); every other cloud path runs in its request's user context |
+| Kledg Cloud (this fork, [cloud.md](cloud.md)) | `system`, reason `instance-extension`, in `lib/cloud/billing/stripe-webhook.service.ts` (the Stripe webhook, once its signature is checked) `lib/cloud/maintenance.service.ts` (the daily maintenance, after the `CRON_SECRET` check) and `lib/cloud/enforcement.ts` (the plan limit on writes: ranks the owner's companies, ids only, for any member of one of them); every other cloud path runs in its request's user context |
 | Instance extensions (forks, the demo) | `withSystemContext('instance-extension', fn, { companyIds })` or `withUserContext(userId, fn)`, from `lib/rls/context.ts` ([extension-points.md](extension-points.md#row-level-security)) |
 
 `withUserContext`, `withSystemContext`, `withAnonymousContext` and

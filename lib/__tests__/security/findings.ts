@@ -207,10 +207,55 @@ export const DELEGATED_FINDINGS = {
   'KLEDG-DEL-unvalidated-bodies': { id: 'KLEDG-DEL-unvalidated-bodies', title: 'Unvalidated bodies', status: 'fixed', severity: 'low', area: 'validation', note: 'Fixed: the listed routes validate with zod; integration feature config bounded. app/api/__tests__/route-bodies.test.ts.' },
 } as const satisfies Record<string, Finding>
 
+/**
+ * Kledg Cloud only (kledghq/kledg-cloud, pentest round 2 of the hosted
+ * layer, docs/cloud.md): billing, plan limits, sign-up, cloud RLS. Tests in
+ * lib/cloud/__tests__/security.db.test.ts.
+ */
+export const CLOUD_FINDINGS = {
+  'KLEDG-CLOUD-001': {
+    id: 'KLEDG-CLOUD-001',
+    title: 'Plan limit enforced only at company creation: a switch to a smaller plan keeps every company writable',
+    status: 'open',
+    severity: 'medium',
+    cvss: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N', // 4.3
+    area: 'cloud/billing',
+    note: 'TBD',
+  },
+  'KLEDG-CLOUD-002': {
+    id: 'KLEDG-CLOUD-002',
+    title: 'Concurrent company creations pass the plan limit check together (TOCTOU)',
+    status: 'open',
+    severity: 'low',
+    cvss: 'CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N', // 3.1
+    area: 'cloud/billing',
+    note: 'TBD',
+  },
+  'KLEDG-CLOUD-003': {
+    id: 'KLEDG-CLOUD-003',
+    title: 'A Cabinet trial, without a card, creates companies without bound',
+    status: 'open',
+    severity: 'low',
+    cvss: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:L', // 4.3
+    area: 'cloud/billing',
+    note: 'TBD',
+  },
+  'KLEDG-CLOUD-004': {
+    id: 'KLEDG-CLOUD-004',
+    title: 'Pre-account takeover: a member added by the operator inherits the password of an unconfirmed sign-up',
+    status: 'open',
+    severity: 'medium',
+    cvss: 'CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:L/A:N', // 5.3
+    area: 'cloud/signup',
+    note: 'TBD',
+  },
+} as const satisfies Record<string, Finding>
+
 export type NewFindingId = keyof typeof NEW_FINDINGS
 export type DelegatedFindingId = keyof typeof DELEGATED_FINDINGS
+export type CloudFindingId = keyof typeof CLOUD_FINDINGS
 
 /** Skip-tag helper: `it.skip(skip('KLEDG-SEC-001', 'short reason'), ...)`. */
-export function skip(id: NewFindingId | DelegatedFindingId, reason: string): string {
+export function skip(id: NewFindingId | DelegatedFindingId | CloudFindingId, reason: string): string {
   return `[${id}] ${reason}`
 }

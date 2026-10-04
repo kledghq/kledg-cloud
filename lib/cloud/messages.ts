@@ -41,9 +41,20 @@ export function companyReadOnlyMessage(access: BillingAccess): string {
   return `Cette société est en lecture seule : ${why}. Ses données restent consultables et exportables (FEC, export complet). Le titulaire du compte peut rétablir l'accès depuis sa page Facturation.`
 }
 
+/** Why a company beyond the limit of its owner's plan is read-only (after a switch to a smaller plan), as any member reads it. */
+export function companyOverLimitMessage(access: BillingAccess): string {
+  const name = access.planId ? PLANS[access.planId].name : ''
+  return `Cette société est en lecture seule : l'offre ${name} de son titulaire couvre ${companyLimitLabel(access.companyLimit)} et son compte en possède davantage. Ses données restent consultables et exportables (FEC, export complet). Le titulaire du compte peut passer à une offre plus large depuis sa page Facturation.`
+}
+
 /** Why the plan forbids one more company. */
 export function companyLimitMessage(access: BillingAccess, count: number): string {
   const name = access.planId ? PLANS[access.planId].name : ''
   const scope = access.phase === 'trial' ? `Votre essai de l'offre ${name} permet` : `Votre offre ${name} permet`
-  return `${scope} ${companyLimitLabel(access.companyLimit)} : vous en avez déjà ${count}. Passez à une offre plus large pour créer une nouvelle société.`
+  // Cabinet has no larger plan: its companies beyond the 25 included are billed, once the trial is paid.
+  const way =
+    access.phase === 'trial' && access.planId === 'cabinet'
+      ? "Les sociétés suivantes, facturées à l'unité, se créent une fois l'abonnement payé, à la fin de l'essai."
+      : 'Passez à une offre plus large pour créer une nouvelle société.'
+  return `${scope} ${companyLimitLabel(access.companyLimit)} : vous en avez déjà ${count}. ${way}`
 }

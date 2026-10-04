@@ -48,6 +48,11 @@ describe('billing state', () => {
     expect(daysLeft(trialEnd, now)).toBe(12)
   })
 
+  it('stops a Cabinet trial at the 25 included companies: extra ones are billed only once paid (KLEDG-CLOUD-003)', () => {
+    expect(billingAccess(snapshot({ subscriptionStatus: 'trialing', planId: 'cabinet' }), now, settings).companyLimit).toBe(25)
+    expect(billingAccess(snapshot({ subscriptionStatus: 'active', planId: 'cabinet' }), now, settings).companyLimit).toBeNull()
+  })
+
   it('is active with the limit of its plan; Cabinet has no hard limit', () => {
     expect(billingAccess(snapshot({ subscriptionStatus: 'active', planId: 'essentiel' }), now, settings)).toMatchObject({
       phase: 'active',
