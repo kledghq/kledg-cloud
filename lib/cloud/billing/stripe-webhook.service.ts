@@ -62,6 +62,33 @@ export function itemKind(item: Stripe.SubscriptionItem): ProductKind | null {
   return PRODUCT_KINDS.find((kind) => key === lookupKey(kind, 'month') || key === lookupKey(kind, 'year')) ?? null
 }
 
+/**
+ * The discount of a subscription (a promotion code entered at Checkout), as
+ * a French summary for the operator ("-80 %, à vie"): never the code
+ * itself. Stripe applies it before tax and shows it on the invoices; plan
+ * limits do not depend on it.
+ */
+export function discountFields(subscription: Stripe.Subscription): { discountSummary: string | null; discountEnd: Date | null } {
+  const discount = subscription.discounts.find((d): d is Stripe.Discount => typeof d === 'object' && d !== null)
+  const coupon = discount?.source?.coupon
+  if (!discount || !coupon || typeof coupon === 'string') {
+    return { discountSummary: subscription.discounts.length > 0 ? 'Remise' : null, discountEnd: null }
+  }
+  const amount =
+    coupon.percent_off !== null
+      ? `-${String(coupon.percent_off).replace('.', ',')} %`
+      : coupon.amount_off !== null
+        ? `-${(coupon.amount_off / 100).toFixed(2).replace('.', ',')} €`
+        : 'Remise'
+  const duration =
+    coupon.duration === 'forever'
+      ? 'à vie'
+      : coupon.duration === 'once'
+        ? 'sur la première facture'
+        : `pendant ${coupon.duration_in_months ?? '?'} mois`
+  return { discountSummary: `${amount}, ${duration}`, discountEnd: fromUnix(discount.end) }
+}
+
 /** The billing fields mirrored from a subscription as Stripe holds it (items expanded with their product). */
 export function subscriptionFields(subscription: Stripe.Subscription) {
   const items = subscription.items.data
@@ -81,6 +108,7 @@ export function subscriptionFields(subscription: Stripe.Subscription) {
     subscriptionEndedAt: fromUnix(subscription.ended_at),
     extraCompanies: extra?.quantity ?? 0,
     dedicatedDatabase: items.some((item) => itemKind(item) === 'dedicated_database'),
+    ...discountFields(subscription),
   }
 }
 
@@ -156,7 +184,7 @@ async function resolveTarget(event: Stripe.Event, stripe: Stripe): Promise<Targe
     logger.warn('Stripe event for a customer without a billing account', { eventId: event.id, type: event.type })
     return { status: 'ignored', reason: 'unknown_customer' }
   }
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price.product'] })
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price.product', 'discounts.source.coupon'] })
   // An old subscription ending must not replace the one the account pays now.
   if (account.stripeSubscriptionId && account.stripeSubscriptionId !== subscription.id && ENDED.has(subscription.status)) {
     return { status: 'ignored', reason: 'stale_subscription' }

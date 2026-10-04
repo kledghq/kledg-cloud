@@ -88,6 +88,7 @@ export async function createCheckoutSession(user: CurrentUser, input: CheckoutIn
       // Required with an existing customer for tax ids and the address Stripe Tax needs.
       customer_update: { address: 'auto', name: 'auto' },
       billing_address_collection: 'required',
+      // Promotion codes (Stripe coupons): Stripe Tax applies to the discounted amount and the invoices show it.
       allow_promotion_codes: true,
       locale: 'fr',
       // No card for the trial: Stripe asks for one only when an amount is due now.
@@ -127,6 +128,8 @@ export interface InvoiceSummary {
   /** ISO day of issue. */
   date: string
   totalCents: number
+  /** Discounts applied before tax (a promotion code), in cents. */
+  discountCents: number
   currency: string
   status: string | null
   /** Stripe-hosted page and PDF of the invoice. */
@@ -160,6 +163,7 @@ export async function listInvoices(user: CurrentUser, stripe: Stripe = getStripe
       number: invoice.number,
       date: new Date(invoice.created * 1000).toISOString().slice(0, 10),
       totalCents: invoice.total,
+      discountCents: (invoice.total_discount_amounts ?? []).reduce((sum, d) => sum + d.amount, 0),
       currency: invoice.currency,
       status: invoice.status,
       hostedUrl: stripeUrl(invoice.hosted_invoice_url),

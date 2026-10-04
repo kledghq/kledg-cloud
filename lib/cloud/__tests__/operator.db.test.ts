@@ -69,6 +69,7 @@ describe.skipIf(!available)('operator console', () => {
         billingInterval: 'month',
         trialEnd: new Date('2026-11-20T00:00:00Z'),
         trialUsed: true,
+        discountSummary: '-80\u00a0%, à vie',
       },
     })
     const company = await prisma.company.create({ data: { name: 'Atelier', slug: 'atelier', siren: '912345675' } })
@@ -111,6 +112,7 @@ describe.skipIf(!available)('operator console', () => {
         subscriptionStatus: 'trialing',
         trialEnd: '2026-11-20T00:00:00.000Z',
         companies: 1,
+        discount: '-80\u00a0%, à vie',
       }),
     ])
     // No secret or Stripe identifier leaves the server.

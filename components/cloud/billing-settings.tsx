@@ -111,6 +111,7 @@ export function BillingSettings({ overview, checkout }: { overview: BillingOverv
                 {overview.extraCompanies > 0 ? `, dont ${overview.extraCompanies} en supplément` : ''}
               </span>
             </Fact>
+            {overview.discount ? <Fact label="Remise">{overview.discount}</Fact> : null}
             {overview.trialEndsAt ? (
               <Fact label="Fin de l'essai">
                 <DateDisplay value={overview.trialEndsAt} format="long" />
@@ -282,6 +283,9 @@ function InvoicesCard({ enabled }: { enabled: boolean }) {
                     <span className="text-muted-foreground">{invoice.number}</span>
                   </span>
                   <span className="flex items-center gap-3">
+                    {invoice.discountCents > 0 ? (
+                      <span className="text-muted-foreground">remise {formatAmount(invoice.discountCents / 100)}</span>
+                    ) : null}
                     <span className="num">{formatAmount(invoice.totalCents / 100)}</span>
                     <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                     {invoice.pdfUrl ? (

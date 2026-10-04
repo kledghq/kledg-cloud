@@ -81,6 +81,8 @@ export function subscriptionObject(over: {
   trial?: { start: Date; end: Date }
   /** A price that lost its lookup key (an early adopter after a price change): only the product says what it is. */
   legacyPrice?: boolean
+  /** A promotion code redeemed at Checkout (coupon expanded, like the webhook asks). */
+  discount?: { percentOff: number; duration: 'forever' | 'once' | 'repeating'; months?: number }
   metadata?: Record<string, string>
 }) {
   const interval = over.interval ?? 'month'
@@ -115,6 +117,7 @@ export function subscriptionObject(over: {
     currency: 'eur',
     customer: over.customer,
     default_payment_method: over.trial ? null : 'pm_TestCard000001',
+    discounts: over.discount ? [discountObject(over.id, over.customer, over.discount)] : [],
     ended_at: over.endedAt ? unix(over.endedAt) : null,
     items: { object: 'list', data: items, has_more: false, url: `/v1/subscription_items?subscription=${over.id}` },
     latest_invoice: 'in_TestLatest00001',
@@ -127,8 +130,55 @@ export function subscriptionObject(over: {
   }
 }
 
-export function checkoutSessionObject(over: { id: string; customer: string; subscription: string; clientReferenceId: string; mode?: string }) {
+/** A subscription discount from a promotion code, coupon expanded (no real code name). */
+export function discountObject(subscription: string, customer: string, discount: { percentOff: number; duration: 'forever' | 'once' | 'repeating'; months?: number }) {
   return {
+    id: 'di_TestKledg0001',
+    object: 'discount',
+    customer,
+    end: null,
+    invoice: null,
+    invoice_item: null,
+    promotion_code: 'promo_TestKledg0001',
+    source: {
+      type: 'coupon',
+      coupon: {
+        id: 'coupon_TestKledg01',
+        object: 'coupon',
+        amount_off: null,
+        currency: null,
+        duration: discount.duration,
+        duration_in_months: discount.months ?? null,
+        max_redemptions: 25,
+        name: 'Test coupon',
+        percent_off: discount.percentOff,
+        valid: true,
+      },
+    },
+    start: Math.floor(new Date('2026-10-20T10:00:00Z').getTime() / 1000),
+    subscription,
+    subscription_item: null,
+  }
+}
+
+export function checkoutSessionObject(over: {
+  id: string
+  customer: string
+  subscription: string
+  clientReferenceId: string
+  mode?: string
+  /** A promotion code entered on the Checkout page: amounts in cents (subtotal, discount, tax computed on the discounted amount). */
+  discount?: { subtotal: number; discount: number; tax: number }
+}) {
+  return {
+    ...(over.discount
+      ? {
+          amount_subtotal: over.discount.subtotal,
+          amount_total: over.discount.subtotal - over.discount.discount + over.discount.tax,
+          discounts: [{ coupon: null, promotion_code: 'promo_TestKledg0001' }],
+          total_details: { amount_discount: over.discount.discount, amount_shipping: 0, amount_tax: over.discount.tax },
+        }
+      : {}),
     id: over.id,
     object: 'checkout.session',
     automatic_tax: { enabled: true, liability: { type: 'self' }, status: 'complete' },
@@ -146,8 +196,9 @@ export function checkoutSessionObject(over: { id: string; customer: string; subs
   }
 }
 
-export function invoiceObject(over: { id: string; customer: string; subscription: string | null; status?: string }) {
+export function invoiceObject(over: { id: string; customer: string; subscription: string | null; status?: string; discountCents?: number }) {
   return {
+    total_discount_amounts: over.discountCents ? [{ amount: over.discountCents, discount: 'di_TestKledg0001' }] : [],
     id: over.id,
     object: 'invoice',
     created: unix(new Date('2026-10-20T10:00:00Z')),

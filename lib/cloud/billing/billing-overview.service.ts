@@ -25,6 +25,8 @@ export interface BillingOverview {
   companyCount: number
   companyLimit: number | null
   extraCompanies: number
+  /** Discount of the subscription ("-80 %, à vie"). */
+  discount: string | null
   trialEndsAt: string | null
   readOnlyAt: string | null
   retrievalEndsAt: string | null
@@ -83,6 +85,7 @@ export async function loadBillingOverview(user: CurrentUser, now: Date = new Dat
     companyCount: stored ? await countedCompanies(stored.id) : 0,
     companyLimit: access.companyLimit,
     extraCompanies: account.extraCompanies,
+    discount: account.discountSummary,
     trialEndsAt: iso(access.trialEndsAt),
     readOnlyAt: iso(access.readOnlyAt),
     retrievalEndsAt: iso(access.retrievalEndsAt),

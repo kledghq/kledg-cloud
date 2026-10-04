@@ -51,6 +51,7 @@ describe.skipIf(!available)('billing overview', () => {
       companyCount: 0,
       companyLimit: 0,
       extraCompanies: 0,
+      discount: null,
       trialEndsAt: null,
       readOnlyAt: null,
       retrievalEndsAt: null,

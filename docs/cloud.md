@@ -75,6 +75,14 @@ new price in Stripe and move the lookup key to it (transfer_lookup_key):
 existing subscriptions keep the price they were sold at (early adopters
 keep it for life). Nothing in the code ever migrates a subscription.
 
+Promotion codes: Checkout accepts them (`allow_promotion_codes`). The
+coupons and codes are created in the Stripe dashboard only, never named in
+this public repository. Stripe applies the discount before tax (Stripe Tax
+computes VAT on the discounted amount) and shows it on the invoices; the
+Facturation page shows it next to the plan and on each invoice, and the
+operator console next to the account (`discountSummary`, for instance
+"-80 %, à vie"). A discount never changes the plan or its limits.
+
 Companies counted against a plan are the companies the account owns and
 can reach, archived ones excepted. Essentiel and Holding refuse one company
 more, in French, with a link to the plans. Cabinet has no hard limit: after

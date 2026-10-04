@@ -50,6 +50,8 @@ export function virtualBillingAccount(userId: string, now: Date = new Date()): C
     paymentFailedAt: null,
     extraCompanies: 0,
     dedicatedDatabase: false,
+    discountSummary: null,
+    discountEnd: null,
     stripeSyncedAt: null,
     renewalReminderFor: null,
     contractEndNoticeFor: null,

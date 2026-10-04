@@ -29,6 +29,8 @@ export interface OperatorAccount {
   companies: number
   extraCompanies: number
   dedicatedDatabase: boolean
+  /** Discount of the subscription ("-80 %, à vie"), null without one. */
+  discount: string | null
   deletionScheduledFor: string | null
   createdAt: string
 }
@@ -68,6 +70,7 @@ export async function listOperatorAccounts(query: z.infer<typeof OperatorListQue
       companies: row._count.companies,
       extraCompanies: row.extraCompanies,
       dedicatedDatabase: row.dedicatedDatabase,
+      discount: row.discountSummary,
       deletionScheduledFor: row.deletionScheduledFor?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
     })),

@@ -97,6 +97,9 @@ export function OperatorConsole({ initial, nextCursor: initialCursor }: { initia
                     {account.planId ?? 'Aucune'}
                     {account.billingInterval ? ` (${account.billingInterval === 'year' ? 'annuel' : 'mensuel'})` : ''}
                     {account.dedicatedDatabase ? ', base dédiée' : ''}
+                    {account.discount ? (
+                      <span className="text-muted-foreground block text-xs">Remise {account.discount}</span>
+                    ) : null}
                   </TableCell>
                   <TableCell>
                     <StatusBadge tone={PHASES[account.phase].tone}>{PHASES[account.phase].label}</StatusBadge>

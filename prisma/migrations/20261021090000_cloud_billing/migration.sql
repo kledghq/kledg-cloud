@@ -20,6 +20,8 @@ CREATE TABLE "cloud_billing_accounts" (
     "paymentFailedAt" TIMESTAMP(3),
     "extraCompanies" INTEGER NOT NULL DEFAULT 0,
     "dedicatedDatabase" BOOLEAN NOT NULL DEFAULT false,
+    "discountSummary" TEXT,
+    "discountEnd" TIMESTAMP(3),
     "stripeSyncedAt" TIMESTAMP(3),
     "renewalReminderFor" TIMESTAMP(3),
     "contractEndNoticeFor" TIMESTAMP(3),

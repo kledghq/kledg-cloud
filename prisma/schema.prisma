@@ -45,6 +45,10 @@ model CloudBillingAccount {
   extraCompanies       Int                     @default(0)
   /// Dedicated database add-on subscribed.
   dedicatedDatabase    Boolean                 @default(false)
+  /// Discount of the subscription (a promotion code at Checkout), as shown to the operator: "-80 %, à vie".
+  discountSummary      String?
+  /// End of a discount limited in time.
+  discountEnd          DateTime?
   stripeSyncedAt       DateTime?
   /// Period end the annual renewal reminder was sent for.
   renewalReminderFor   DateTime?

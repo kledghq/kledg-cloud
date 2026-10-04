@@ -220,6 +220,43 @@ describe.skipIf(!available)('Stripe webhook', () => {
     expect(await account()).toMatchObject({ planId: 'essentiel', cancelAtPeriodEnd: true, currentPeriodEnd: new Date('2027-02-20T00:00:00Z') })
   })
 
+  it('mirrors a promotion code redeemed at Checkout, without touching the plan or its limits', async () => {
+    live.sub_TestKledg0001 = subscriptionObject({
+      id: 'sub_TestKledg0001',
+      customer: 'cus_TestOwner0001',
+      status: 'active',
+      plan: 'holding',
+      discount: { percentOff: 80, duration: 'forever' },
+    })
+    // 39 EUR excluding tax, 80 % off, VAT computed by Stripe Tax on the discounted 7.80 EUR.
+    const session = checkoutSessionObject({
+      id: 'cs_TestKledg0007',
+      customer: 'cus_TestOwner0001',
+      subscription: 'sub_TestKledg0001',
+      clientReferenceId: 'ba-owner',
+      discount: { subtotal: 3900, discount: 3120, tax: 156 },
+    })
+    expect(session.total_details).toEqual({ amount_discount: 3120, amount_shipping: 0, amount_tax: 156 })
+    expect(await (await deliver(stripeEvent('checkout.session.completed', session))).json()).toEqual({ received: true, status: 'applied' })
+    expect(await account()).toMatchObject({ planId: 'holding', subscriptionStatus: 'active', discountSummary: '-80\u00a0%, à vie', discountEnd: null })
+    const { accessOf } = await import('../billing-account.service')
+    expect(accessOf(await account()).companyLimit).toBe(5)
+    expect(api.calls[0].body).toContain('expand[1]=discounts.source.coupon')
+
+    // A discount limited in time, then removed.
+    live.sub_TestKledg0001 = subscriptionObject({
+      id: 'sub_TestKledg0001',
+      customer: 'cus_TestOwner0001',
+      status: 'active',
+      discount: { percentOff: 12.5, duration: 'repeating', months: 3 },
+    })
+    await deliver(stripeEvent('customer.subscription.updated', live.sub_TestKledg0001))
+    expect((await account()).discountSummary).toBe('-12,5\u00a0%, pendant 3 mois')
+    live.sub_TestKledg0001 = subscriptionObject({ id: 'sub_TestKledg0001', customer: 'cus_TestOwner0001', status: 'active' })
+    await deliver(stripeEvent('customer.subscription.updated', live.sub_TestKledg0001))
+    expect((await account()).discountSummary).toBeNull()
+  })
+
   it('records the free trial (one per client) and its end', async () => {
     await prisma.cloudBillingAccount.update({ where: { id: 'ba-owner' }, data: { stripeCustomerId: 'cus_TestOwner0001' } })
     const trial = { start: new Date('2026-10-20T10:00:00Z'), end: new Date('2026-11-19T10:00:00Z') }
