@@ -216,38 +216,113 @@ export const CLOUD_FINDINGS = {
   'KLEDG-CLOUD-001': {
     id: 'KLEDG-CLOUD-001',
     title: 'Plan limit enforced only at company creation: a switch to a smaller plan keeps every company writable',
-    status: 'open',
+    status: 'fixed',
+    fixedIn: '496fdd8',
     severity: 'medium',
     cvss: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N', // 4.3
     area: 'cloud/billing',
-    note: 'TBD',
+    note:
+      'lib/cloud/enforcement.ts checked the company limit of the plan (Essentiel 1, Holding 5) only in ' +
+      'cloudCompanyCreationRefusal; cloudCompanyWriteRefusal only looked at the billing state. A customer who ' +
+      'created 5 companies on Holding (or any number during a Cabinet trial) and then switched to Essentiel in ' +
+      'the Customer Portal, or subscribed to Essentiel after the trial or an ended contract, kept every company ' +
+      'writable for the price of one. Fixed: on every write of a company route or MCP tool, the companies the ' +
+      'owner\'s account holds (archived ones excepted) are ranked by ownership date; those beyond the limit get a ' +
+      'French 409 with a link to the plans, the oldest stay writable. The rank is read in an instance-extension ' +
+      'system context (ids only) so an invited member gets the same answer as the owner. ' +
+      'lib/cloud/__tests__/security.db.test.ts.',
   },
   'KLEDG-CLOUD-002': {
     id: 'KLEDG-CLOUD-002',
     title: 'Concurrent company creations pass the plan limit check together (TOCTOU)',
-    status: 'open',
+    status: 'fixed',
+    fixedIn: '496fdd8',
     severity: 'low',
     cvss: 'CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N', // 3.1
     area: 'cloud/billing',
-    note: 'TBD',
+    note:
+      'POST /api/companies runs companyCreationRefusal (count of owned companies), then createCompany, then ' +
+      'afterCompanyCreated (ownership row) in separate transactions. Three parallel requests of an Essentiel ' +
+      'trial all answered 201 and all three companies were writable. The creation check cannot be serialized ' +
+      'from the cloud layer (the hooks are Kledg core); fixed by the write-time rank of KLEDG-CLOUD-001: the ' +
+      'extra companies exist but are read-only. lib/cloud/__tests__/security.db.test.ts.',
   },
   'KLEDG-CLOUD-003': {
     id: 'KLEDG-CLOUD-003',
     title: 'A Cabinet trial, without a card, creates companies without bound',
-    status: 'open',
+    status: 'fixed',
+    fixedIn: '496fdd8',
     severity: 'low',
     cvss: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:L', // 4.3
     area: 'cloud/billing',
-    note: 'TBD',
+    note:
+      'Cabinet has no hard limit (companies beyond 25 are billed per unit), and the trial needs no card, so a ' +
+      'trial account could create any number of companies (each a full chart of accounts, journals and fiscal ' +
+      'year in the shared database) that are never paid if the trial lapses. Fixed in lib/cloud/billing/state.ts: ' +
+      'during the trial the limit is the 25 included companies; once paid, no hard limit again. ' +
+      'lib/cloud/__tests__/security.db.test.ts, lib/cloud/billing/__tests__/state.test.ts.',
   },
   'KLEDG-CLOUD-004': {
     id: 'KLEDG-CLOUD-004',
     title: 'Pre-account takeover: a member added by the operator inherits the password of an unconfirmed sign-up',
     status: 'open',
     severity: 'medium',
-    cvss: 'CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:L/A:N', // 5.3
+    cvss: 'CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:L/A:N', // ~5.3
     area: 'cloud/signup',
-    note: 'TBD',
+    note:
+      'Public sign-up (cloud) creates an unconfirmed account with the password the requester chose. An attacker ' +
+      'signs up first with the address of someone the customer will ask the operator to add (their accountant). ' +
+      'lib/rbac/add-member-to-company.service.ts (Kledg core) attaches the membership to the existing user and ' +
+      'keeps its credential; the account is then never purged (it has a membership). Every sign-in attempt by ' +
+      'the attacker mails a confirmation link to the victim; once the victim clicks it (they expect an email ' +
+      'from Kledg), the attacker signs in with their own password and reads the company. Fix belongs to Kledg ' +
+      'core: when the existing user is unconfirmed, treat it like a new account (revoke sessions, replace the ' +
+      'credential, mark confirmed, send the welcome link that proves the address). Test skipped with this id in ' +
+      'lib/cloud/__tests__/security.db.test.ts (confirmed failing when enabled).',
+  },
+  'KLEDG-CLOUD-005': {
+    id: 'KLEDG-CLOUD-005',
+    title: 'Missed Stripe webhooks are never reconciled: an ended trial or subscription can stay writable',
+    status: 'open',
+    severity: 'low',
+    cvss: 'CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N', // 3.1
+    area: 'cloud/billing',
+    note:
+      'The billing state is only what the webhook mirrored (state.ts never compares trialEnd or ' +
+      'currentPeriodEnd with the clock for trialing and active). If deliveries fail longer than Stripe retries ' +
+      '(3 days: wrong STRIPE_WEBHOOK_SECRET after a rotation, endpoint disabled, a 502 loop), trials that ' +
+      'ended and cancelled subscriptions stay writable indefinitely. Not exploitable by a customer alone; ' +
+      'hardening: a daily maintenance step that retrieves from Stripe the accounts whose trialEnd or ' +
+      'currentPeriodEnd passed more than a day ago and applies them like the webhook, plus an alert on webhook ' +
+      'failures. Documented only.',
+  },
+  'KLEDG-CLOUD-006': {
+    id: 'KLEDG-CLOUD-006',
+    title: 'A company whose ownership hook fails is neither billed nor restricted',
+    status: 'open',
+    severity: 'low',
+    cvss: 'CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N', // 3.1
+    area: 'cloud/billing',
+    note:
+      'app/api/companies/route.ts (Kledg core) calls afterCompanyCreated after the creation committed; a ' +
+      'failure there (database error, timeout) answers 500 but leaves the company and its admin membership ' +
+      'without a CloudCompanyOwnership row, which the cloud treats as an operator company: never counted, ' +
+      'billed or made read-only. No way found to trigger the failure on purpose. Fix belongs to Kledg core: run ' +
+      'the hook inside the creation transaction (or delete the company when it throws). Documented only; the ' +
+      'operator can list memberships without ownership to detect it.',
+  },
+  'KLEDG-CLOUD-007': {
+    id: 'KLEDG-CLOUD-007',
+    title: 'Cloud protections fail open when KLEDG_CLOUD_MODE or KLEDG_RLS is missing',
+    status: 'open',
+    severity: 'info',
+    area: 'cloud/config',
+    note:
+      'Without KLEDG_CLOUD_MODE=true (a variable scoped to Preview only, a typo) the deployment serves the same ' +
+      'database as plain Kledg: REQUIRE_EMAIL_VERIFICATION is false, so unconfirmed sign-ups (squatted ' +
+      'addresses) can sign in, and no plan limit or read-only state applies. Cloud mode does not require ' +
+      'KLEDG_RLS=enforce either. Production configuration check (report); a start-up assertion that refuses to ' +
+      'serve when cloud tables hold accounts but the flags are off would make it fail closed. Documented only.',
   },
 } as const satisfies Record<string, Finding>
 
