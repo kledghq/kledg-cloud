@@ -28,6 +28,7 @@ vi.mock('@/lib/cloud/billing/stripe', async (importOriginal) => {
 })
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
+import { seedMembership } from '@/lib/__tests__/helpers/membership'
 import { clearPriceCache } from '@/lib/cloud/billing/stripe-prices'
 import { form, invoiceObject, pricesList, stripeFetch } from '../../__tests__/helpers/stripe-fixtures'
 
@@ -70,6 +71,8 @@ describe.skipIf(!available)('checkout, portal and invoices', () => {
     state.user = { ...OWNER }
     clearPriceCache()
     await prisma.cloudCompanyOwnership.deleteMany()
+    await prisma.member.deleteMany()
+    await prisma.organization.deleteMany()
     await prisma.company.deleteMany()
     await prisma.cloudBillingAccount.deleteMany()
     api = stripeFetch({
@@ -136,6 +139,7 @@ describe.skipIf(!available)('checkout, portal and invoices', () => {
     const account = await prisma.cloudBillingAccount.create({ data: { ownerUserId: OWNER.id, trialUsed: true, subscriptionStatus: 'canceled' } })
     for (let i = 0; i < 27; i++) {
       const company = await prisma.company.create({ data: { name: `Client ${i}`, slug: `client-${i}`, siren: String(100000000 + i) } })
+      await seedMembership(prisma, OWNER.id, company.id, 'companyAdmin')
       await prisma.cloudCompanyOwnership.create({ data: { companyId: company.id, billingAccountId: account.id } })
     }
     expect((await call('checkout', 'POST', { plan: 'cabinet', interval: 'month' })).status).toBe(200)

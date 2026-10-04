@@ -32,6 +32,7 @@ import { waitUntil } from '@vercel/functions'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { withUserContext } from '@/lib/rls/context'
 import { sendEmail } from '@/lib/email'
 import { getAppUrl } from '@/lib/config'
 import { logger } from '@/lib/logger'
@@ -123,7 +124,7 @@ export async function processSignup(input: SignupInput, now: Date = new Date()):
   }
 
   // The CGV version accepted and its date (the trial itself starts at Checkout, with a plan).
-  await recordTermsAcceptance(userId, now)
+  await withUserContext(userId, () => recordTermsAcceptance(userId, now))
   // Better Auth signs the link and calls the verification email hook of lib/auth.ts.
   await auth.api.sendVerificationEmail({ body: { email: input.email, callbackURL: CLOUD_PATHS.signupVerified } })
   return 'created'

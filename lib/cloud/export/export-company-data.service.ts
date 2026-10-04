@@ -21,6 +21,7 @@
 import { prisma } from '@/lib/prisma'
 import { exportFec } from '@/lib/fec/export'
 import { writeAuditLog } from '@/lib/audit'
+import { currentRlsContext, runWithRlsContext } from '@/lib/rls/context'
 import { zipReadableStream, type ZipEntry } from './zip'
 
 const PAGE = 2000
@@ -164,5 +165,8 @@ export async function exportableCompanies(userId: string): Promise<Array<{ id: s
 export async function companyExportArchive(companyId: string, userId: string, now: Date = new Date()): Promise<{ fileName: string; stream: ReadableStream<Uint8Array> }> {
   const { slug } = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { slug: true } })
   await writeAuditLog('info', 'Full data export', { action: 'CLOUD_DATA_EXPORT', companyId, metadata: { userId } })
-  return { fileName: exportFileName(slug, now), stream: zipReadableStream(companyExportEntries(companyId, now), now) }
+  // The archive is read after the route returned: each step runs again in the request's context.
+  const context = currentRlsContext()
+  const within = <T>(step: () => T): T => (context ? runWithRlsContext(context, step) : step())
+  return { fileName: exportFileName(slug, now), stream: zipReadableStream(companyExportEntries(companyId, now), now, within) }
 }

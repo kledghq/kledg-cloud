@@ -24,6 +24,7 @@ import { logger } from '@/lib/logger'
 import { isPlanId, isProductKind, lookupKey, PRODUCT_KINDS, type PlanId, type ProductKind } from './plans'
 import { getStripe, stripeWebhooks, stripeWebhookSecret } from './stripe'
 import { hasLiveSubscription } from './state'
+import { withSystemContext } from '@/lib/rls/context'
 
 export const HANDLED_EVENT_TYPES = [
   'checkout.session.completed',
@@ -203,7 +204,9 @@ export async function applyStripeEvent(event: Stripe.Event, stripe: Stripe = get
 export async function receiveStripeWebhook(rawBody: string, signature: string | null, stripe?: Stripe): Promise<WebhookOutcome> {
   const event = verifyStripeEvent(rawBody, signature)
   try {
-    return await applyStripeEvent(event, stripe)
+    // No user: Stripe calls. A system context reaches the billing accounts (docs/rls.md); the
+    // signature checked above is what authorizes it.
+    return await withSystemContext('instance-extension', () => applyStripeEvent(event, stripe))
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       // Another account already holds this customer or subscription: never move it silently.

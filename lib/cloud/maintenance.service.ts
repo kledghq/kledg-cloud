@@ -22,6 +22,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import type Stripe from 'stripe'
 import { prisma } from '@/lib/prisma'
+import { withSystemContext } from '@/lib/rls/context'
 import { UnauthorizedError } from '@/lib/accounting/errors'
 import { getAppUrl } from '@/lib/config'
 import { sendEmail } from '@/lib/email'
@@ -149,6 +150,11 @@ export interface MaintenanceReport {
 }
 
 export async function runCloudMaintenance(now: Date = new Date(), stripe?: () => Stripe): Promise<MaintenanceReport> {
+  // A server job without a user, after the CRON_SECRET check: it walks every billing account (docs/rls.md).
+  return withSystemContext('instance-extension', () => runMaintenanceSteps(now, stripe))
+}
+
+async function runMaintenanceSteps(now: Date, stripe?: () => Stripe): Promise<MaintenanceReport> {
   const report: MaintenanceReport = {
     renewalReminders: await sendRenewalReminders(now),
     endedContracts: await noticeEndedContracts(now),

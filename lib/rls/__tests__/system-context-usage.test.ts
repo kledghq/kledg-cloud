@@ -20,6 +20,9 @@ const ALLOWED: Record<string, string[]> = {
   'lib/banking/sync-banks.service.ts': ['cron:bank-sync'],
   // A company created by a user the instance policy allows: it has no member yet, and its organization and membership are system writes.
   'lib/companies/create-company.service.ts': ['company-creation'],
+  // Kledg Cloud (docs/cloud.md): the Stripe webhook (signature checked first) and the daily maintenance (CRON_SECRET).
+  'lib/cloud/billing/stripe-webhook.service.ts': ['instance-extension'],
+  'lib/cloud/maintenance.service.ts': ['instance-extension'],
 }
 
 function files(entry: string): string[] {

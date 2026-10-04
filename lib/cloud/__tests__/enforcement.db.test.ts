@@ -35,6 +35,7 @@ vi.mock('@/lib/cloud/billing/stripe', async (importOriginal) => {
 })
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
+import { seedMembership } from '@/lib/__tests__/helpers/membership'
 import type { CreateCompanyInput } from '@/lib/companies/company-wizard'
 import { clearPriceCache } from '@/lib/cloud/billing/stripe-prices'
 import { form, pricesList, stripeFetch, subscriptionObject } from './helpers/stripe-fixtures'
@@ -168,6 +169,8 @@ describe.skipIf(!available)('Kledg Cloud enforcement', () => {
     })
     for (let i = 0; i < 25; i++) {
       const c = await prisma.company.create({ data: { name: `Client ${i}`, slug: `client-${i}`, siren: String(200000000 + i) } })
+      // The owner administers the companies it owns, as the creation makes it.
+      await seedMembership(prisma, 'u-cabinet', c.id, 'companyAdmin')
       await prisma.cloudCompanyOwnership.create({ data: { companyId: c.id, billingAccountId: account.id } })
     }
     clearPriceCache()

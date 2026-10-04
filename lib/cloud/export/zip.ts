@@ -114,13 +114,22 @@ export async function* zipStream(entries: AsyncIterable<ZipEntry> | Iterable<Zip
   yield new Uint8Array(end.buffer)
 }
 
-/** A ReadableStream over `zipStream`, for a streamed HTTP response. */
-export function zipReadableStream(entries: AsyncIterable<ZipEntry> | Iterable<ZipEntry>, now?: Date): ReadableStream<Uint8Array> {
+/**
+ * A ReadableStream over `zipStream`, for a streamed HTTP response. The
+ * runtime pulls it after the handler returned, outside the request's async
+ * context: `within` runs each step in the context it must keep (the RLS
+ * context of the request, docs/rls.md).
+ */
+export function zipReadableStream(
+  entries: AsyncIterable<ZipEntry> | Iterable<ZipEntry>,
+  now?: Date,
+  within: <T>(step: () => T) => T = (step) => step(),
+): ReadableStream<Uint8Array> {
   const chunks = zipStream(entries, now)
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        const { value, done } = await chunks.next()
+        const { value, done } = await within(() => chunks.next())
         if (done) controller.close()
         else controller.enqueue(value)
       } catch (error) {
