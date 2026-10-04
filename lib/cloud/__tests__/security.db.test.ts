@@ -9,7 +9,7 @@
  *   writable companies than the plan allows;
  * - KLEDG-CLOUD-003: a Cabinet trial (no card) must not create companies
  *   without bound;
- * - KLEDG-CLOUD-004 (open, fix in Kledg core): a member added to a company
+ * - KLEDG-CLOUD-004 (fixed in Kledg core, KLEDG-SEC-011): a member added to a company
  *   by the operator must not inherit the password of an unconfirmed account
  *   someone else created with that address through the public sign-up.
  *
@@ -32,7 +32,6 @@ vi.mock('@/lib/session', () => ({ getCurrentUser: async () => state.user }))
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
 import { seedMembership } from '@/lib/__tests__/helpers/membership'
-import { skip } from '@/lib/__tests__/security/findings'
 import type { CreateCompanyInput } from '@/lib/companies/company-wizard'
 
 const available = await testDatabaseAvailable()
@@ -186,7 +185,7 @@ describe.skipIf(!available)('Kledg Cloud attack tests', () => {
     expect(await cloudCompanyCreationRefusal({ id: 'u-trial', email: USERS.trial.email, role: 'user' })).toBeNull()
   })
 
-  it.skip(skip('KLEDG-CLOUD-004', 'adding an existing unconfirmed account as a member keeps the password its creator chose'), async () => {
+  it('[KLEDG-CLOUD-004] fixed: adding an existing unconfirmed account as a member no longer keeps the password its creator chose', async () => {
     const { auth } = await import('@/lib/auth')
     const { addMemberToCompany } = await import('@/lib/rbac/add-member-to-company.service')
     // The attacker signs up first with the address of the accountant the customer will ask for (public sign-up, never confirmed).

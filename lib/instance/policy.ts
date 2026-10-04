@@ -49,7 +49,12 @@ export async function companyCreationRefusal(actor: InstanceActor): Promise<Acti
   return cloudCompanyCreationRefusal(actor)
 }
 
-/** Called once `actor` created the company `companyId` (after it is ready). Cloud: records which account owns it. */
+/**
+ * Called once `actor` created the company `companyId` (after it is ready).
+ * Throwing removes the company and fails the request
+ * (lib/companies/create-company.service.ts). Kledg: nothing. Cloud:
+ * records which account owns it.
+ */
 export async function afterCompanyCreated(companyId: string, actor: InstanceActor): Promise<void> {
   if (!isCloudMode()) return
   const { cloudAfterCompanyCreated } = await import('@/lib/cloud/enforcement')
