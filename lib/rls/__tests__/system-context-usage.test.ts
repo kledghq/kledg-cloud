@@ -25,6 +25,8 @@ const ALLOWED: Record<string, string[]> = {
   'lib/cloud/maintenance.service.ts': ['instance-extension'],
   // Kledg Cloud plan limit on writes: ranks the owner's companies (ids only) for any member of one of them.
   'lib/cloud/enforcement.ts': ['instance-extension'],
+  // Re-encryption after a rotation of the auth secret: every company's sealed credentials, at server start.
+  'lib/crypto/reencrypt.ts': ['secret-rotation'],
 }
 
 function files(entry: string): string[] {
