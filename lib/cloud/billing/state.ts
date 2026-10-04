@@ -6,7 +6,8 @@
  *
  *   no subscription (or a first payment not done): none, nothing to write
  *     yet; the trial starts by choosing a plan at Checkout
- *   trialing: trial, writable (30 days, no card; without one added it ends)
+ *   trialing: trial, writable (30 days, no card; without one added it ends;
+ *     Cabinet limited to its 25 included companies until paid)
  *   active: active (endsAt set once cancelled at period end)
  *   past_due / unpaid: grace for 14 days after the failed payment, then
  *     read-only until paid (CGV art. 9)
@@ -121,7 +122,10 @@ export function billingAccess(snapshot: BillingSnapshot, now: Date, settings: { 
   if (snapshot.deletionScheduledFor && snapshot.deletionReason === 'requested') return readOnly('deletion_requested')
 
   if (status === 'trialing') {
-    return { ...base, phase: 'trial', writable: true, trialEndsAt: snapshot.trialEnd ?? snapshot.currentPeriodEnd }
+    // A trial is free and needs no card: Cabinet's companies beyond the 25 included are billed only once
+    // it is paid, so the trial stops at the included ones (KLEDG-CLOUD-003).
+    const trialLimit = plan ? (PLANS[plan].companyLimit ?? PLANS[plan].includedCompanies) : 0
+    return { ...base, phase: 'trial', writable: true, companyLimit: trialLimit, trialEndsAt: snapshot.trialEnd ?? snapshot.currentPeriodEnd }
   }
   if (status === 'active') {
     return { ...base, phase: 'active', writable: true, endsAt: snapshot.cancelAtPeriodEnd ? snapshot.currentPeriodEnd : null }

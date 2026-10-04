@@ -9,8 +9,14 @@
  *   A refusal says why in French and links to the plans.
  * - Writing to a company: refused once the owning account is read-only
  *   (CGV: 14 days after a failed payment, contract ended, deletion
- *   requested). Reads, reports, the FEC and the full export are GET
- *   requests and stay open.
+ *   requested), and for the companies beyond the limit of the plan: the
+ *   account's oldest companies (archived ones excepted) stay writable up to
+ *   the limit, the others are read-only. The limit is checked again on
+ *   every write because the plan can shrink after the creations (a switch
+ *   to Essentiel in the Customer Portal, a new subscription after a Cabinet
+ *   trial) and two creations at once both pass the creation check
+ *   (KLEDG-CLOUD-001, KLEDG-CLOUD-002). Reads, reports, the FEC and the
+ *   full export are GET requests and stay open.
  * - Instance administrators (the operator) are never restricted, and the
  *   companies they create belong to no account.
  */
@@ -18,7 +24,9 @@
 import type { ActionRefusal, InstanceActor } from '@/lib/instance/types'
 import { logger } from '@/lib/logger'
 import { CLOUD_PATHS, UPGRADE_LINK } from './config'
-import { companyLimitMessage, companyReadOnlyMessage, readOnlyMessage, START_TRIAL_MESSAGE } from './messages'
+import { prisma } from '@/lib/prisma'
+import { withSystemContext } from '@/lib/rls/context'
+import { companyLimitMessage, companyOverLimitMessage, companyReadOnlyMessage, readOnlyMessage, START_TRIAL_MESSAGE } from './messages'
 import {
   accessOf,
   billingAccountOfCompany,
@@ -53,9 +61,36 @@ export async function cloudAfterCompanyCreated(companyId: string, actor: Instanc
   }
 }
 
+/**
+ * The account's companies that count against its plan (owned, existing, not
+ * archived), oldest first. Read in a system context: a member invited into
+ * one of the companies does not reach the owner's other companies, and the
+ * rank must be the same for every member. Only ids leave this function.
+ */
+async function countedCompanyIdsInOrder(billingAccountId: string): Promise<string[]> {
+  return withSystemContext('instance-extension', async () => {
+    const owned = await prisma.cloudCompanyOwnership.findMany({
+      where: { billingAccountId },
+      orderBy: [{ createdAt: 'asc' }, { companyId: 'asc' }],
+      select: { companyId: true },
+    })
+    const ids = owned.map((row) => row.companyId)
+    if (ids.length === 0) return []
+    const counted = new Set(
+      (await prisma.company.findMany({ where: { id: { in: ids }, archivedAt: null }, select: { id: true } })).map((company) => company.id),
+    )
+    return ids.filter((id) => counted.has(id))
+  })
+}
+
 export async function cloudCompanyWriteRefusal(companyId: string, now: Date = new Date()): Promise<ActionRefusal | null> {
   const account = await billingAccountOfCompany(companyId)
   if (!account) return null
   const access = accessOf(account, now)
-  return access.writable ? null : { message: companyReadOnlyMessage(access), link: UPGRADE_LINK }
+  if (!access.writable) return { message: companyReadOnlyMessage(access), link: UPGRADE_LINK }
+  if (access.companyLimit !== null) {
+    const rank = (await countedCompanyIdsInOrder(account.id)).indexOf(companyId)
+    if (rank >= access.companyLimit) return { message: companyOverLimitMessage(access), link: UPGRADE_LINK }
+  }
+  return null
 }

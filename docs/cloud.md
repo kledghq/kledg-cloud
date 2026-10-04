@@ -90,6 +90,15 @@ each creation, and every day, the quantity of the extra company line
 follows the number of companies beyond 25 (with prorations). An existing
 extra line keeps its price; a new one takes the current price.
 
+The limit is checked again on every write, because a plan can shrink after
+the companies were created (a switch to Essentiel in the Customer Portal, a
+new subscription after a Cabinet trial or an ended contract) and two
+creations at once both pass the creation check: the account's oldest
+companies stay writable up to the limit, the others are read-only (French
+409 with a link to the plans) until the owner moves to a larger plan or the
+operator archives one. A Cabinet trial stops at the 25 included companies:
+those beyond are billed, so they are created once the subscription is paid.
+
 ## Account lifecycle (CGV version 1.0)
 
 The published CGV (https://www.kledg.com/fr/terms, version 1.0, in force
@@ -134,9 +143,10 @@ report, FEC and export keeps working, for every member of the company.
 - Row level security (`KLEDG_RLS=enforce`): the cloud tables have their own
   policies (billing account: its owner, and the members of the companies it
   owns for reading; ownership rows: reachable companies; terms acceptances:
-  their user; Stripe event ids: system only). The Stripe webhook and the
-  maintenance run in a `system` context (`instance-extension`); everything
-  else runs in the request's user context. A company created by a user runs
+  their user; Stripe event ids: system only). The Stripe webhook, the
+  maintenance and the rank of a company among its owner's companies (plan
+  limit on writes, ids only) run in a `system` context
+  (`instance-extension`); everything else runs in the request's user context. A company created by a user runs
   as `system` (`company-creation`) until its membership exists.
 
 ## Environment variables

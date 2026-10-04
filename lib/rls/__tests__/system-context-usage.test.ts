@@ -23,6 +23,8 @@ const ALLOWED: Record<string, string[]> = {
   // Kledg Cloud (docs/cloud.md): the Stripe webhook (signature checked first) and the daily maintenance (CRON_SECRET).
   'lib/cloud/billing/stripe-webhook.service.ts': ['instance-extension'],
   'lib/cloud/maintenance.service.ts': ['instance-extension'],
+  // Kledg Cloud plan limit on writes: ranks the owner's companies (ids only) for any member of one of them.
+  'lib/cloud/enforcement.ts': ['instance-extension'],
 }
 
 function files(entry: string): string[] {

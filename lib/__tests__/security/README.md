@@ -56,3 +56,5 @@ regex), `KLEDG-SEC-005` (Qonto file hosts and address check),
 grants) and `KLEDG-SEC-008` (API key default level). Findings from the code
 review carry a `KLEDG-DEL-*` id; all of them are fixed and their tests are
 enabled. Still open: `KLEDG-SEC-009` (password reset timing).
+Kledg Cloud only: `CLOUD_FINDINGS` (`KLEDG-CLOUD-*`), tested in
+`lib/cloud/__tests__/security.db.test.ts` and reported in the round 2 cloud pentest.
