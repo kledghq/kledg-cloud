@@ -167,7 +167,7 @@ model Company {
   isVatExempt                Boolean           @default(false) // Indique si l'entreprise est exonérée de TVA
   vatExemptReason            String? // Raison de l'exonération de TVA
   vatNumber                  String? // Numéro de TVA intracommunautaire
-  corporateTaxRegime         String? // Régime d'IS (normal, simplified, micro)
+  corporateTaxRegime         String? // Régime d'IS (normal, simplified, micro, income_tax: impôt sur le revenu, lib/companies/profit-taxation.ts)
   legalType                  CompanyLegalType? // Type juridique de la société (SARL, SAS, SA, etc.)
   legalForm                  String? // Forme juridique détaillée (pour les déclarations fiscales)
   color                      String? // Couleur pour les graphiques (format hex: #RRGGBB)
@@ -262,6 +262,7 @@ model Company {
   mcpPendingActions          McpPendingAction[]
   onboarding                 CompanyOnboarding?
   dashboardLayouts           DashboardLayout[]
+  sidebarPreferences         SidebarPreference[]
   tiers                      Tiers[]
   invoices                   Invoice[]
   invoiceNumberCounters      InvoiceNumberCounter[]
@@ -1021,7 +1022,7 @@ model TaxRegimeHistory {
   id              String    @id @default(cuid())
   companyId       String
   regimeType      String // vat, corporateTax
-  regime          String // normal, simplified, franchise, real, micro
+  regime          String // vat: normal, simplified, franchise, real, mini_real; corporateTax: normal, simplified, micro, income_tax (lib/companies/profit-taxation.ts)
   startDate       DateTime // Date de début d'application du régime
   endDate         DateTime? // Date de fin d'application (null si toujours actif)
   notes           String? // Notes optionnelles
@@ -1312,6 +1313,7 @@ model User {
   mcpConfirmations  McpConfirmation[]
   mcpPendingActions McpPendingAction[]
   dashboardLayouts  DashboardLayout[]
+  sidebarPreferences SidebarPreference[]
   preference        UserPreference?
   expenseClaimants  ExpenseClaimant[]
 
@@ -1665,6 +1667,35 @@ model UpdateConnection {
   @@map("update_connection")
 }
 
+// Versions this instance has run, one row per (version, commit), written at
+// server start when the running version differs from the latest row
+// (lib/updates/history.ts). Shown in "Historique des mises à jour" on the
+// "Mises à jour" page, instance administrators only. The unique index is
+// NULLS NOT DISTINCT (migration 20261117100000_instance_versions), so a
+// deployment without a known commit is recorded once too.
+model InstanceVersion {
+  id                String   @id @default(cuid())
+  version           String
+  commit            String?
+  branch            String?
+  platform          String
+  firstSeenAt       DateTime @default(now())
+  previousVersion   String?
+  previousCommit    String?
+  // User who installed it from the "Mises à jour" page (UPDATES_MERGE audit), null otherwise.
+  installedByUserId String?
+  // "update-page" or "external" (host redeploy, git push, manual update).
+  source            String   @default("external")
+  // Prisma migrations finished since the previous row (empty on the first row).
+  migrations        String[] @default([])
+  // False when the migration history could not be read (KLEDG_RLS=enforce: the application role cannot read it).
+  migrationsKnown   Boolean  @default(true)
+
+  @@unique([version, commit])
+  @@index([firstSeenAt])
+  @@map("instance_versions")
+}
+
 // Companies an AI assistant (OAuth client) or an API key may reach on behalf
 // of a user (lib/ai-access). One grant per (user, OAuth client) and per API
 // key. No grant means every company the user can access, including future
@@ -1807,6 +1838,31 @@ model DashboardLayout {
   @@map("dashboard_layouts")
 }
 
+/// Sidebar of one user in one company: the entries and groups they hid
+/// from their menu, on top of their display mode (docs/modes-et-menu.md).
+/// Personal: nobody reads or writes another user's. Ids are validated on
+/// write and unknown ones ignored on read (components/layout/sidebar-menu.ts),
+/// so pages come and go without a migration. Without a row the whole menu
+/// of the mode shows.
+model SidebarPreference {
+  id           String   @id @default(cuid())
+  userId       String
+  companyId    String
+  /// Company-relative URLs of the hidden entries: ["/banking/statements"]
+  hiddenItems  String[] @default([])
+  /// Stable ids of the hidden groups (NavGroup.id): ["saisie"]
+  hiddenGroups String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+  @@map("sidebar_preferences")
+}
+
 /// Personal preferences of one user, following them across devices
 /// (lib/appearance). `appearance` holds the chart colours, validated by zod
 /// on read and write (lib/appearance/schema.ts); a row that no longer parses
@@ -1817,7 +1873,7 @@ model UserPreference {
   /// { "version": 1, "palette": "custom", "base": "sobre", "custom": { "light": { "revenue": "#0072b2" }, "dark": {} } }
   /// Null when the user never saved colours (they only chose a display mode): the default colours.
   appearance  Json?
-  /// 'simple' or 'expert' (lib/appearance/display-mode.ts, check constraint); null until chosen, read as 'expert'.
+  /// 'simple', 'standard' or 'expert' (lib/appearance/display-mode.ts, check constraint); null until chosen, read as 'expert'.
   displayMode String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -2187,6 +2243,10 @@ model ExpenseLine {
   priorDistanceKm     Int?
   /// Year of the mileage scale applied.
   scaleYear           Int?
+  /// Who took a meal alone (MEALS) when the claimant does not say it, for a
+  /// company at IR: EXPLOITANT or EMPLOYEE (check constraint, migration
+  /// 20261119090000); null: given by the claimant (lib/expense-reports/exploitant-meals.ts).
+  mealTaker           String?
 
   report            ExpenseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
   receiptAttachment Attachment?   @relation(fields: [receiptAttachmentId], references: [id], onDelete: SetNull)

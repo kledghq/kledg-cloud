@@ -4,7 +4,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useParams, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowRight, FileCheck2, RefreshCw, RotateCw } from 'lucide-react'
+import { ArrowRight, ExternalLink, FileCheck2, RefreshCw, RotateCw } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -21,6 +21,8 @@ import { responseError } from '@/hooks/use-cursor-list'
 import { centsToDecimal } from '@/lib/utils/money'
 import { plural } from '@/lib/utils/plural'
 import type { MissingReceipts, MissingReceipt } from '@/lib/banking/missing-receipts.service'
+import type { AiPromptTarget } from '@/lib/ai-assist/prompts'
+import { ProposeWithAiButton } from '@/components/features/ai-assist/propose-with-ai-button'
 
 type Side = 'debit' | 'credit' | 'all'
 
@@ -48,6 +50,48 @@ function writeThreshold(cents: number | null) {
   } catch {
     // Storage blocked: the threshold is only remembered for this visit.
   }
+}
+
+/** The request of "Proposer avec l'IA" for one transaction without receipt. */
+function missingReceiptTarget(t: MissingReceipt): AiPromptTarget {
+  return {
+    kind: 'missing_receipt',
+    id: t.id,
+    date: t.date,
+    label: t.counterpartyName || t.label || '',
+    amountCents: t.amountCents,
+    supplier: t.supplier ? { name: t.supplier.name, vendorId: t.supplier.vendorId } : null,
+    bankProvider: t.bankProvider,
+  }
+}
+
+/** "Fournisseur" for a known vendor or a supplier tiers, "Client" for a customer tiers. */
+function supplierRole(supplier: NonNullable<MissingReceipt['supplier']>): string {
+  return supplier.kind === 'CUSTOMER' ? 'Client' : 'Fournisseur'
+}
+
+/** The supplier recognised from the label, and the page of its invoices when known; nothing when none. */
+function SupplierHint({ t }: { t: MissingReceipt }) {
+  if (!t.supplier) return null
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+      <span className="text-muted-foreground truncate">
+        {supplierRole(t.supplier)}&nbsp;: <span className="text-foreground">{t.supplier.name}</span>
+      </span>
+      {t.supplier.invoicesUrl ? (
+        <a
+          href={t.supplier.invoicesUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-link inline-flex items-center gap-1 underline-offset-4 hover:underline"
+          aria-label={`Où trouver la facture ${t.supplier.name} (nouvel onglet)`}
+        >
+          Où trouver la facture
+          <ExternalLink className="size-3" aria-hidden />
+        </a>
+      ) : null}
+    </span>
+  )
 }
 
 /** The transactions list filtered on one transaction: its account, its day, without receipt, its label. */
@@ -252,15 +296,23 @@ export default function MissingReceiptsPage() {
             <ul className="divide-y rounded-md border lg:hidden" aria-label="Opérations sans justificatif">
               {(data?.transactions ?? []).map((t) => (
                 <li key={t.id}>
-                  <Link href={transactionHref(companyId, t)} className="hover:bg-muted/60 flex items-start justify-between gap-3 px-3 py-2.5">
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm">{t.counterpartyName || t.label || 'Opération sans libellé'}</span>
-                      <span className="text-muted-foreground block truncate text-xs">
-                        <DateDisplay value={t.date} /> · {bankAccountName(t.bankAccount)}
+                  <div className="flex items-center gap-1 pr-2">
+                    <Link href={transactionHref(companyId, t)} className="hover:bg-muted/60 flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2.5">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm">{t.counterpartyName || t.label || 'Opération sans libellé'}</span>
+                        <span className="text-muted-foreground block truncate text-xs">
+                          <DateDisplay value={t.date} /> · {bankAccountName(t.bankAccount)}
+                        </span>
                       </span>
-                    </span>
-                    <Amount value={t.amountCents / 100} sign="always" className="shrink-0 text-sm" />
-                  </Link>
+                      <Amount value={t.amountCents / 100} sign="always" className="shrink-0 text-sm" />
+                    </Link>
+                    <ProposeWithAiButton icon target={missingReceiptTarget(t)} />
+                  </div>
+                  {t.supplier ? (
+                    <div className="px-3 pb-2.5">
+                      <SupplierHint t={t} />
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -292,6 +344,7 @@ export default function MissingReceiptsPage() {
                         <TableCell className="max-w-80">
                           <span className="block truncate">{t.counterpartyName || t.label || 'Opération sans libellé'}</span>
                           {t.counterpartyName && t.label ? <span className="text-muted-foreground block truncate text-xs">{t.label}</span> : null}
+                          <SupplierHint t={t} />
                         </TableCell>
                         <TableCell className="text-muted-foreground">{bankAccountName(t.bankAccount)}</TableCell>
                         <TableCell numeric>
@@ -301,12 +354,15 @@ export default function MissingReceiptsPage() {
                           {t.reconciled ? <StatusBadge tone="success">Rapprochée</StatusBadge> : <StatusBadge tone="neutral">À rapprocher</StatusBadge>}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button asChild size="xs" variant="outline">
-                            <Link href={transactionHref(companyId, t)}>
-                              Voir la transaction
-                              <ArrowRight aria-hidden />
-                            </Link>
-                          </Button>
+                          <div className="flex items-center justify-end gap-1">
+                            <ProposeWithAiButton icon target={missingReceiptTarget(t)} />
+                            <Button asChild size="xs" variant="outline">
+                              <Link href={transactionHref(companyId, t)}>
+                                Voir la transaction
+                                <ArrowRight aria-hidden />
+                              </Link>
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))

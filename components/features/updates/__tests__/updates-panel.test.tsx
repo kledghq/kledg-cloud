@@ -19,6 +19,9 @@ vi.mock('../update-actions', () => ({
     return <div>UpdateActions</div>
   },
 }))
+vi.mock('../update-history', () => ({
+  UpdateHistory: ({ currentVersion }: { currentVersion: string }) => <div>UpdateHistory {currentVersion}</div>,
+}))
 
 import { UpdatesPanel } from '../updates-panel'
 import { MANUAL_UPDATE_COMMANDS } from '@/lib/updates/hosting'
@@ -109,6 +112,7 @@ describe('UpdatesPanel', () => {
       isFork: true,
       previousCommit: 'abcdef1234567890',
       overviewMigrations: ['20261001000000_add_x'],
+      upToDate: false,
     })
   })
 
@@ -155,6 +159,11 @@ describe('UpdatesPanel', () => {
     expect(await screen.findByText('GitHub limite les requêtes, réessayez dans une heure.')).toBeInTheDocument()
     expect(screen.getByText('Statut inconnu')).toBeInTheDocument()
     expect(screen.getByText('Inconnue')).toBeInTheDocument()
+  })
+
+  it('shows the update history under the other cards, with the running version', async () => {
+    render(<UpdatesPanel />)
+    expect(await screen.findByText('UpdateHistory 1.3.0')).toBeInTheDocument()
   })
 
   it('shows the load error', async () => {

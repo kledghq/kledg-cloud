@@ -85,6 +85,14 @@ Le bouton **Révoquer** d'un assistant autorisé supprime, pour votre compte :
 
 Le nettoyage est fait par la base de données (déclencheurs sur la table des autorisations), quel que soit le chemin de la révocation. Les autres utilisateurs du même assistant ne sont pas concernés. Pour rétablir l'accès, reconnectez l'assistant : la page d'autorisation s'affiche de nouveau.
 
+## Proposer avec l'IA
+
+Sur les objets où un assistant aide (une transaction à rapprocher, un brouillon d'écriture, une facture, un justificatif manquant, une dépense ou une recette à classer en mode simple, une déclaration de TVA, ce qui bloque la clôture d'un exercice), le bouton **Proposer avec l'IA** ouvre votre assistant dans un nouvel onglet avec une demande préparée, par exemple : « Avec Kledg (société « Atelier Lumen », id …), propose l'écriture pour la transaction … du 29/09/2026, « PRLV SEPA FREE PRO », débit de 47,99 €. Lis-la avec get_transaction_details… ». La demande nomme la société et l'objet par leurs identifiants et les outils à appeler ; Kledg n'appelle aucun modèle : c'est votre assistant qui lit les données, avec l'accès que vous lui avez donné. Claude préremplit le champ sans l'envoyer ; ChatGPT peut envoyer la demande dès l'ouverture. Pour un justificatif manquant, la demande donne le fournisseur reconnu et demande à l'assistant de chercher la facture dans vos outils de messagerie et de fichiers s'il y a accès, puis de la joindre avec `upload_receipt` (compte Qonto) ou de vous la donner, sinon d'indiquer la page des factures du fournisseur ([Justificatifs](lettrage-et-tiers.md#où-trouver-la-facture)) ; Kledg ne lit ni vos mails ni vos fichiers.
+
+- **Quand il s'affiche** : seulement si vous avez connecté un assistant qui atteint la société (`lib/ai-access/company-assistants.service.ts`) : un assistant autorisé (consentement toujours présent, client non désactivé) ou une clé API active et non expirée, dont l'accès couvre toutes vos sociétés ou celle-ci. Sans assistant, pas de bouton.
+- **Quelle application** : Claude (`https://claude.ai/new?q=`) ou ChatGPT (`https://chatgpt.com/?q=`) pour un assistant reconnu par son identifiant vérifié ; la demande est aussi copiée dans le presse-papiers, au cas où le champ resterait vide. Pour une clé API, Claude Code ou un client non vérifié, la demande est copiée. Avec plusieurs assistants, la flèche à côté du bouton permet de choisir ; le dernier choix est retenu pour votre compte dans ce navigateur.
+- **Données** : la demande ne contient que des identifiants, des dates, des montants et des libellés cités entre « » (sans guillemets, sauts de ligne ni caractères de contrôle, tronqués) : un libellé bancaire ne peut pas y ajouter d'instruction. Jamais de secret. Les modèles sont dans `lib/ai-assist/prompts.ts`, testés avec les outils qu'ils nomment.
+
 ## Outils
 
 ### Conventions communes
@@ -114,7 +122,7 @@ Le nettoyage est fait par la base de données (déclencheurs sur la table des au
 | `list_entries` | Écritures (avec leur identifiant), filtrables par date, journal, compte, statut |
 | `list_bank_transactions` | Transactions bancaires, par défaut celles à rapprocher |
 | `get_aged_balance` | Balance âgée à une date : créances clients (411) et dettes fournisseurs (401) non lettrées, par tiers et par ancienneté de l'échéance ([lettrage et tiers](lettrage-et-tiers.md)) ; droit `reports:read` |
-| `list_missing_receipts` | Transactions bancaires sans justificatif, au-dessus d'un seuil, par exercice ou période et par compte ; droit `banking:read` |
+| `list_missing_receipts` | Transactions bancaires sans justificatif, au-dessus d'un seuil, par exercice ou période et par compte, avec le fournisseur reconnu et la page officielle de ses factures quand elle est connue ([Justificatifs](lettrage-et-tiers.md#où-trouver-la-facture)) ; droit `banking:read` |
 | `list_tiers` | Clients et fournisseurs avec leur compte auxiliaire, leurs identifiants, comptes par défaut et délai de paiement ([factures et tiers](factures-et-tiers.md)) ; droit `entries:read` |
 | `list_invoices` | Factures d'achat ou de vente, avec totaux, statut (brouillon, comptabilisée, payée partiellement, payée) et reste dû ; droit `entries:read` |
 | `get_invoice` | Une facture avec ses lignes, son détail de TVA par taux, son écriture et ses règlements ; droit `entries:read` |
@@ -408,9 +416,9 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 
 | | Gestionnaires | Couverts par un outil | Exclus |
 | --- | --- | --- | --- |
-| Qui modifient des données (POST, PUT, PATCH, DELETE) | 226 | 186 | 40 |
-| Lectures (GET) | 179 | 153 | 26 |
-| Total | 405 | 339 | 66 |
+| Qui modifient des données (POST, PUT, PATCH, DELETE) | 227 | 186 | 41 |
+| Lectures (GET) | 182 | 154 | 28 |
+| Total | 409 | 340 | 69 |
 
 ### Exclusions
 
@@ -423,12 +431,12 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | Serveur MCP | Le serveur MCP lui-même. | 3 (2) |
 | Tâches planifiées | Tâche planifiée appelée par la plateforme avec son secret, jamais par un utilisateur. | 3 (0) |
 | Disponibilité | Sonde de disponibilité de l'instance, sans donnée. | 1 (0) |
-| Administration de l'instance | Administration de l'instance (utilisateurs, mises à jour, messagerie), hors de toute société ; reste dans les pages d'administration. | 13 (9) |
+| Administration de l'instance | Administration de l'instance (utilisateurs, mises à jour, messagerie), hors de toute société ; reste dans les pages d'administration. | 14 (9) |
 | Suppression d'une société | Suppression définitive d'une société : les livres sont conservés 10 ans (Code de commerce art. L123-22) ; une société qui en tient s'archive (archive_company), seule une société vide se supprime, dans Kledg. | 1 (1) |
 | Connexion d'une banque | Connexion d'une banque et identifiants des prestataires (consentement et authentification forte à la banque, secrets) ; restent dans l'interface. | 16 (11) |
 | Documents de l'approbation | Documents de l'approbation des comptes, générés et signés dans Kledg (voir « Ce que le serveur ne fait pas »). | 1 (0) |
 | Factures de frais de gestion | Génération des factures de frais de gestion, décision du mainteneur du 2026-10-04 (voir « Ce que le serveur ne fait pas »). | 1 (1) |
-| Aides de l'interface | Préférence ou aide de l'interface (tableau de bord, liste de démarrage, compteurs, aides de saisie), sans donnée comptable qu'un autre outil ne donne pas. | 8 (3) |
+| Aides de l'interface | Préférence ou aide de l'interface (tableau de bord, menu latéral, liste de démarrage, compteurs, aides de saisie), sans donnée comptable qu'un autre outil ne donne pas. | 10 (4) |
 
 ### Table des routes
 
@@ -611,6 +619,8 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `DELETE /api/companies/[id]/shareholders/[shareholderId]` | settings:update | `manage_company_records` (CT) |
 | `GET /api/companies/[id]/shareholders` | settings:read | `get_company_settings` (L) |
 | `POST /api/companies/[id]/shareholders` | settings:update | `manage_company_records` (CT) |
+| `GET /api/companies/[id]/sidebar-preferences` | settings:read | Exclu : aides de l'interface |
+| `PUT /api/companies/[id]/sidebar-preferences` | settings:read | Exclu : aides de l'interface |
 | `GET /api/companies/[id]/simple-mode-settings` | settings:read | `get_company_settings` (L) |
 | `PUT /api/companies/[id]/simple-mode-settings` | settings:update | `update_company_settings` (CT) |
 | `GET /api/companies/[id]/simple/counts` | banking:read | `list_expenses_to_review` (L) |
@@ -666,6 +676,7 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `DELETE /api/expense-reports/[id]` | expenses:submit | `manage_expense_report` (CT) |
 | `POST /api/expense-reports/[id]/workflow` | expenses:submit | `manage_expense_report` (CT) |
 | `GET /api/expense-reports/receipts` | expenses:submit, banking:read | Exclu : aides de l'interface |
+| `GET /api/expense-reports/meal-rule` | expenses:submit | `get_expense_report` (L), `create_draft_expense_report` (B) ; le partage des repas de l'exploitant est dans `meal` et `mealRule`. |
 | `GET /api/expense-reports` | entries:read | `list_expense_reports` (L) |
 | `POST /api/expense-reports` | expenses:submit | `create_draft_expense_report` (B) |
 | `GET /api/fec` | reports:export | `export_fec` (CT) |
@@ -829,6 +840,7 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `POST /api/updates/connection` | administrateur de l’instance | Exclu : administration de l'instance |
 | `DELETE /api/updates/connection` | administrateur de l’instance | Exclu : administration de l'instance |
 | `GET /api/updates/github` | administrateur de l’instance | Exclu : administration de l'instance |
+| `GET /api/updates/history` | administrateur de l’instance | Exclu : administration de l'instance |
 | `POST /api/updates/install` | administrateur de l’instance | Exclu : administration de l'instance |
 | `POST /api/updates/prepare` | administrateur de l’instance | Exclu : administration de l'instance |
 | `GET /api/updates` | administrateur de l’instance | Exclu : administration de l'instance |

@@ -15,6 +15,7 @@ import { formatDate, formatDateTime, SELF_HOSTING_DOCS_URL, updatesApi } from '.
 import { GitHubConnect } from './github-connect'
 import { ReleaseNotes } from './release-notes'
 import { UpdateActions } from './update-actions'
+import { UpdateHistory } from './update-history'
 
 function StateBadge({ state }: { state: UpdateOverview['state'] }) {
   if (state === 'available') {
@@ -201,12 +202,15 @@ function Overview({ overview, onChange }: { overview: UpdateOverview; onChange: 
               isFork={overview.connection.kind === 'fork'}
               previousCommit={current.commit}
               overviewMigrations={migrations}
+              upToDate={state === 'up-to-date' || state === 'ahead'}
             />
           )}
         </>
       ) : (
         <ManualUpdate platform={current.platform} />
       )}
+
+      <UpdateHistory currentVersion={current.version} />
     </>
   )
 }

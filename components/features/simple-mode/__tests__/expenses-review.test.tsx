@@ -33,6 +33,8 @@ function line(id: string, label: string, amountCents: number, history: Array<{ c
     hasReceipt: false,
     canUploadReceipt: true,
     blockedReason: null,
+    mealRule: 'none',
+    mealRuleExplanation: null,
   }
 }
 
@@ -42,6 +44,7 @@ const LIST: ExpensesToReview = {
   count: 3,
   bulkConfirmableIds: ITEMS.filter((i) => i.suggestion.bulkConfirmable).map((i) => i.id),
   review: { accountantReview: true, setting: null, accountants: [{ name: 'Marc Renaud' }] },
+  mealRuleExplanation: null,
 }
 
 function renderAs(roles: string[]) {
@@ -114,6 +117,58 @@ describe('ExpensesReview', () => {
     expect(toast.success).toHaveBeenCalledWith('2 dépenses classées')
   })
 
+  it('offers "Annuler" on a draft confirmation, which undoes the reconciliation and brings the line back', async () => {
+    const user = userEvent.setup()
+    let undone = false
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/free/confirm')) return new Response(JSON.stringify({ transactionId: 'free', status: 'draft', needsReview: true, learnedRule: null }), { status: 201 })
+      if (url === '/api/transactions/free/reconcile' && init?.method === 'DELETE') {
+        undone = true
+        return new Response(JSON.stringify({ transactionId: 'free', deletedEntryId: 'e1', unlinkedEntryId: null }), { status: 200 })
+      }
+      if (init?.method) return new Response('{}', { status: 500 })
+      return new Response(JSON.stringify(undone ? LIST : { ...LIST, items: ITEMS.slice(1), count: 2 }), { status: 200 })
+    })
+    // The first load lists the line: undone stays false until the DELETE.
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify(LIST), { status: 200 }))
+    renderAs(['companyAdmin'])
+    const free = (await screen.findByText('FREE PRO')).closest('li')!
+    await user.click(within(free).getByRole('button', { name: 'Confirmer' }))
+    await waitFor(() => expect(screen.queryByText('FREE PRO')).toBeNull())
+
+    const [message, options] = vi.mocked(toast.success).mock.calls[0] as unknown as [string, { action: { label: string; onClick: () => void } }]
+    expect(message).toBe('Dépense envoyée à votre comptable.')
+    expect(options.action.label).toBe('Annuler')
+    options.action.onClick()
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Dépense remise à vérifier'))
+    expect(fetchMock.mock.calls.some(([u, init]) => u === '/api/transactions/free/reconcile' && init?.method === 'DELETE')).toBe(true)
+    expect(await screen.findByText('FREE PRO')).toBeTruthy()
+  })
+
+  it('offers no undo once the entry is validated, and reports a refused undo', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/free/confirm')) return new Response(JSON.stringify({ transactionId: 'free', status: 'validated', needsReview: false, learnedRule: null }), { status: 201 })
+      if (url.includes('/mac/confirm')) return new Response(JSON.stringify({ transactionId: 'mac', status: 'draft', needsReview: true, learnedRule: null }), { status: 201 })
+      if (url === '/api/transactions/mac/reconcile') return new Response(JSON.stringify({ error: "L'écriture n° 12 est validée : le rapprochement ne peut pas être annulé." }), { status: 409 })
+      if (init?.method) return new Response('{}', { status: 500 })
+      return new Response(JSON.stringify(LIST), { status: 200 })
+    })
+    renderAs(['companyAdmin'])
+    const free = (await screen.findByText('FREE PRO')).closest('li')!
+    await user.click(within(free).getByRole('button', { name: 'Confirmer' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(toast.success).mock.calls[0]).toEqual(['Dépense classée.'])
+
+    const mac = screen.getByText('APPLE STORE OPERA').closest('li')!
+    await user.click(within(mac).getByRole('button', { name: 'Oui, un ordinateur ou un écran' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(2))
+    const [, options] = vi.mocked(toast.success).mock.calls[1] as unknown as [string, { action: { onClick: () => void } }]
+    options.action.onClick()
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("L'écriture n° 12 est validée : le rapprochement ne peut pas être annulé."))
+  })
+
   it('leaves nothing to click for a read-only member', async () => {
     renderAs(['viewer'])
     const free = (await screen.findByText('FREE PRO')).closest('li')!
@@ -137,9 +192,11 @@ describe('ExpensesReview, money in (Recettes à vérifier)', () => {
     hasReceipt: false,
     canUploadReceipt: false,
     blockedReason: null,
+    mealRule: 'none',
+    mealRuleExplanation: null,
   })
   const items = [credit('nord', 'VIR SEPA STUDIO NORD F-2026-012', 120_000), credit('bpi', 'VIR SEPA BPIFRANCE SUBVENTION INNOVATION', 3_000_000)]
-  const income: ExpensesToReview = { items, count: 2, bulkConfirmableIds: items.map((i) => i.id), review: { accountantReview: false, setting: null, accountants: [] } }
+  const income: ExpensesToReview = { items, count: 2, bulkConfirmableIds: items.map((i) => i.id), review: { accountantReview: false, setting: null, accountants: [] }, mealRuleExplanation: null }
 
   beforeEach(() => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
