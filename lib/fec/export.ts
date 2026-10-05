@@ -8,11 +8,20 @@
  *   and § 100), then the entries in validation order. Kledg assigns numbers at
  *   validation, so validation order is number order (BOFiP § 40: "numérotées
  *   chronologiquement de manière croissante, sans rupture ni inversion").
- * - Closing entries are included once the year is closed; an open year has
- *   none (BOFiP § 30).
+ * - The file holds the entries "après opérations d'inventaire, hors
+ *   écritures de centralisation et hors écritures de solde des comptes de
+ *   charges et de produits" (LPF art. A47 A-1, VII, 1°): the closing entry
+ *   of the closing (journal CL, classes 6 and 7 to 120 or 129) is left out,
+ *   so the classes 6 and 7 of the file still give the result of the year.
+ *   It is the last entry validated in the year, so leaving it out opens no
+ *   gap in the numbering. Inventory entries (depreciation, provisions) stay.
  * - One record per entry line; amounts from Decimal(15, 2) as exact cents.
  * - PieceRef falls back to the entry number and EcritureLib to the entry
  *   description, then the account label, so no mandatory field is blank.
+ * - Drafts left in the year are counted: the export report warns that the
+ *   file is not the final book of the year while they remain (the FEC holds
+ *   "l'ensemble des données comptables", BOFiP § 20; a draft is not yet an
+ *   entry, PCG art. 1031-3).
  */
 
 import { prisma } from '@/lib/prisma'
@@ -21,6 +30,7 @@ import { fecDateOf, parisDayOf } from '@/lib/accounting/entry-date'
 import { calendarDayOf } from '@/lib/utils/date'
 import { centsToFecAmount, parseCents } from '@/lib/utils/money'
 import { sequentialPartOf } from '@/lib/accounting/services/generate-next-entry-number.service'
+import { CLOSING_JOURNAL } from '@/lib/accounting/fiscal-year-closure/constants'
 import {
   FEC_FIELDS,
   FEC_LINE_END,
@@ -87,6 +97,15 @@ export function sortFecEntries<T extends Pick<FecLedgerEntry, 'journalCode' | 'e
       a.entryNumber.localeCompare(b.entryNumber)
     )
   })
+}
+
+/**
+ * The entries a FEC holds: all of them but the closing entry that brings the
+ * accounts of classes 6 and 7 to the result (journal CL, LPF art. A47 A-1,
+ * VII, 1°: "hors écritures de solde des comptes de charges et de produits").
+ */
+export function fecEntriesOfYear<T extends Pick<FecLedgerEntry, 'journalCode'>>(entries: T[]): T[] {
+  return entries.filter((entry) => entry.journalCode.trim().toUpperCase() !== CLOSING_JOURNAL.code)
 }
 
 /** FEC records of the entries (one per line), in file order. */
@@ -220,6 +239,8 @@ export interface FecExport {
   content: string
   entries: number
   lines: number
+  /** Draft entries of the year, left out of the file. */
+  drafts: number
 }
 
 /** FEC of a fiscal year: file name "SirenFECAAAAMMJJ.txt" and content. */
@@ -237,11 +258,15 @@ export async function exportFec(companyId: string, fiscalYearId: string): Promis
   const closingDay = calendarDayOf(fiscalYear.endDate)
   if (!closingDay) throw new ValidationError("Date de clôture de l'exercice invalide")
 
-  const ledger = await loadFecLedger(companyId, fiscalYearId)
+  const [ledger, drafts] = await Promise.all([
+    loadFecLedger(companyId, fiscalYearId).then(fecEntriesOfYear),
+    prisma.accountingEntry.count({ where: { companyId, fiscalYearId, status: 'draft' } }),
+  ])
   return {
     fileName: fecFileName(siren, closingDay.replace(/-/g, '')),
     content: buildFec(ledger),
     entries: ledger.length,
     lines: ledger.reduce((n, e) => n + e.lines.length, 0),
+    drafts,
   }
 }

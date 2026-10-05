@@ -173,7 +173,11 @@ describe('consistency with the income statement', () => {
     })
     expect(statement.unmappedAccounts).toEqual([])
     expect(euros(statement.netResult)).toBe(sig.resultatExerciceCents)
-    expect(euros(statement.intermediateResults!.resultatExploitation!)).toBe(sig.resultatExploitationCents)
+    // The 2033-B has no line for the opérations faites en commun: its résultat d'exploitation (270) includes 755 - 655
+    const quotesParts = variant === 'simplified'
+      ? WORKED_EXAMPLE_ACCOUNTS.filter((a) => /^(655|755)/.test(a.code)).reduce((s, a) => s + a.creditCents - a.debitCents, 0)
+      : 0
+    expect(euros(statement.intermediateResults!.resultatExploitation!)).toBe(sig.resultatExploitationCents + quotesParts)
     expect(euros(statement.intermediateResults!.resultatExceptionnel!)).toBe(sig.resultatExceptionnelCents)
   })
 
@@ -237,6 +241,7 @@ describe('consistency with the balance sheet', () => {
   ;[...sheet.actif.lines, ...sheet.passif.lines].forEach(visit)
   const net = (code: string) => euros(lines.get(code)?.net ?? 0)
   const bilan = computeBalanceIndicators(WORKED_EXAMPLE_ACCOUNTS)
+  const partnersCents = euros(5_000) // 455000 in credit (worked example)
 
   it('reads a balanced balance sheet', () => {
     expect(sheet.actifTotal).toBe(191_100)
@@ -252,7 +257,8 @@ describe('consistency with the balance sheet', () => {
     expect(bilan.autresCreancesExploitationCents).toBe(net('BV') + net('BZ') - euros(700))
     expect(bilan.valeursMobilieresCents).toBe(net('CD'))
     expect(bilan.disponibilitesCents).toBe(net('CF'))
-    expect(bilan.dettesFinancieresCents + bilan.concoursBancairesCents).toBe(net('DS') + net('DT') + net('DU') + net('DV'))
+    // DV holds the partners' current accounts (45 in credit) the indicators keep out of the financial debts
+    expect(bilan.dettesFinancieresCents + bilan.concoursBancairesCents).toBe(net('DS') + net('DT') + net('DU') + net('DV') - partnersCents)
     expect(bilan.capitauxPropresCents).toBe(net('DL'))
   })
 

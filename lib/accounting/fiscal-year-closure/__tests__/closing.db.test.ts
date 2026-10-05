@@ -240,6 +240,57 @@ describe.skipIf(!available)('fiscal year closing', () => {
     expect(sheet2026.netResult).toBe(0)
   })
 
+  it('leaves the closing entry out of the FEC of the closed year (LPF art. A47 A-1)', async () => {
+    // "hors écritures de centralisation et hors écritures de solde des comptes
+    // de charges et de produits": the FEC of a closed year must still give the
+    // result as the balance of classes 6 and 7.
+    const c = await createCompany()
+    await bookYear(c)
+    expect((await closeFiscalYear(c.id, c.fy2025)).success).toBe(true)
+    const { exportFec } = await import('@/lib/fec/export')
+    const { validateFec } = await import('@/lib/fec/validator')
+    const fec = await exportFec(c.id, c.fy2025)
+    const rows = fec.content.trim().split('\r\n').slice(1).map((row) => row.split('\t'))
+    expect(rows.some((r) => r[0] === 'CL')).toBe(false)
+    const cents = (v: string) => Math.round(Number(v.replace(',', '.')) * 100)
+    const result = rows.filter((r) => /^[67]/.test(r[4])).reduce((sum, r) => sum + cents(r[12]) - cents(r[11]), 0)
+    expect(result).toBe(RESULT_2025 * 100)
+    const report = validateFec(fec.content, { fileName: fec.fileName, closingDate: '20251231' })
+    expect(report.errors).toEqual([])
+    expect(report.warnings).toEqual([])
+  })
+
+  it('gives the à-nouveaux the first number of the new year when the year is closed on time, and places them first in the FEC when it is closed late', async () => {
+    // On time: nothing validated yet in 2026, the opening entry is number 1 (BOI-CF-IOR-60-40-20 § 100)
+    const onTime = await createCompany()
+    await bookYear(onTime)
+    const closed = await closeFiscalYear(onTime.id, onTime.fy2025)
+    const opening = await prisma.accountingEntry.findFirstOrThrow({ where: { fiscalYearId: closed.nextFiscalYearId!, journal: { code: 'AN' } } })
+    expect(opening.entryNumber).toBe('1')
+
+    // Late: a 2026 entry is validated before 2025 is closed. Validated numbers never change (PCG art.
+    // 1031-3), so the opening entry takes the next number; BOFiP § 110 admits it ("il est admis qu'elles
+    // soient enregistrées au cours de l'exercice") and the FEC puts it first.
+    const late = await createCompany()
+    await bookYear(late)
+    const fy2026 = await prisma.fiscalYear.create({ data: { companyId: late.id, year: 2026, startDate: day('2026-01-01'), endDate: day('2026-12-31') } })
+    const accounts2026 = new Map<string, string>()
+    for (const [code, label] of CHART) {
+      const created = await prisma.account.create({ data: { companyId: late.id, fiscalYearId: fy2026.id, code, label, isPCG: true } })
+      accounts2026.set(code, created.id)
+    }
+    await book(late, 'BQ', '2026-01-05', [['606', 50, 0], ['512', 0, 50]], { fiscalYearId: fy2026.id, accounts: accounts2026 })
+    expect((await closeFiscalYear(late.id, late.fy2025)).success).toBe(true)
+    const lateOpening = await prisma.accountingEntry.findFirstOrThrow({ where: { fiscalYearId: fy2026.id, journal: { code: 'AN' } } })
+    expect(lateOpening.entryNumber).toBe('2')
+    const { exportFec } = await import('@/lib/fec/export')
+    const { validateFec } = await import('@/lib/fec/validator')
+    const fec = await exportFec(late.id, fy2026.id)
+    const firstRecord = fec.content.split('\r\n')[1].split('\t')
+    expect([firstRecord[0], firstRecord[2]]).toEqual(['AN', '2'])
+    expect(validateFec(fec.content, { fileName: fec.fileName, closingDate: '20261231' }).errors).toEqual([])
+  })
+
   it('is idempotent: a second closing changes nothing', async () => {
     const c = await createCompany()
     await bookYear(c)
@@ -400,7 +451,8 @@ describe.skipIf(!available)('depreciation entries', () => {
     })
     expect(entry.journal.code).toBe('OD')
     expect(entry.date.toISOString()).toBe('2025-12-31T00:00:00.000Z')
-    expect(entry.lines.map((l) => [l.account.code, Number(l.debit), Number(l.credit)])).toEqual([
+    // Lines are read without an order (createMany gives them the same createdAt): debit first
+    expect(entry.lines.map((l) => [l.account.code, Number(l.debit), Number(l.credit)]).sort((x, y) => Number(y[1]) - Number(x[1]))).toEqual([
       ['6811', 368, 0],
       ['28183', 0, 368],
     ])

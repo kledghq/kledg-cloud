@@ -9,6 +9,10 @@
     {
       "path": "/api/cron/cloud-maintenance",
       "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/period-locks",
+      "schedule": "45 4 * * *"
     }
   ]
 }

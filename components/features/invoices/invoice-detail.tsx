@@ -489,8 +489,10 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
 
       <Card>
         <CardHeader>
-          <CardTitle>Facturation électronique</CardTitle>
-          <CardDescription>Identifiants des parties tels qu’enregistrés sur la facture, prêts pour un import Factur-X, UBL ou CII.</CardDescription>
+          <CardTitle>Identifiants des parties</CardTitle>
+          <CardDescription>
+            SIREN et numéros de TVA tels qu’enregistrés sur la facture. Kledg n’est pas une plateforme agréée de facturation électronique&nbsp;: il ne reçoit, n’émet ni ne transmet de facture électronique et ne transmet aucune donnée à l’administration (e-reporting).
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
