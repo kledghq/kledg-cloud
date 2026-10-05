@@ -88,6 +88,8 @@ const FULL_CONTROL_TOOLS: Record<string, boolean> = {
   bulk_reconcile: true,
   delete_bank_transactions: true,
   duplicate_rule: false,
+  add_rule_from_template: false,
+  copy_rules_from_company: false,
   sync_bank_data: false,
   upload_receipt: false,
   manage_invoice: true,
@@ -111,6 +113,12 @@ const INSTANCE_TOOLS = new Set(['create_company'])
 
 /** Draft-level tools (kledg:write) of lib/mcp/drafts, besides create_draft_entry. */
 const DRAFT_TOOLS = [
+  'save_vat_deduction_settings',
+  'prepare_vat_coefficient_regularisation',
+  'save_training_report',
+  'save_training_origins',
+  'save_payroll_tax',
+  'prepare_payroll_tax_entry',
   'create_budget',
   'create_budget_line',
   'update_budget_line',
@@ -298,7 +306,7 @@ describe('full control tools', () => {
   // through registerFullControlTool (define.ts), which checks
   // guard.requireFullControl before any preview or action.
   const dir = path.resolve(__dirname, '../full-control')
-  const toolFiles = ['entries.ts', 'banking.ts', 'ledger.ts', 'year-end.ts', 'lettering.ts', 'invoices.ts', 'chart.ts', 'settings.ts', 'bank-admin.ts', 'records.ts', 'companies.ts']
+  const toolFiles = ['entries.ts', 'banking.ts', 'ledger.ts', 'year-end.ts', 'lettering.ts', 'invoices.ts', 'chart.ts', 'settings.ts', 'bank-admin.ts', 'records.ts', 'companies.ts', 'rules-library.ts']
   const define = readFileSync(path.join(dir, 'define.ts'), 'utf8')
 
   it('checks full control first, in the single registration path', () => {
@@ -345,7 +353,7 @@ describe('draft tools', () => {
   // checks every right of the tool through the company guard before the
   // service runs.
   const dir = path.resolve(__dirname, '../drafts')
-  const toolFiles = ['budgets.ts', 'year-end.ts', 'expense-reports.ts', 'approval.ts', 'simple-mode.ts', 'vat-returns.ts', 'corporate-tax.ts', 'declarations.ts', 'records.ts', 'remuneration.ts', 'annexe.ts']
+  const toolFiles = ['budgets.ts', 'year-end.ts', 'expense-reports.ts', 'approval.ts', 'simple-mode.ts', 'vat-returns.ts', 'corporate-tax.ts', 'declarations.ts', 'records.ts', 'remuneration.ts', 'annexe.ts', 'training.ts']
   const define = readFileSync(path.join(dir, 'define.ts'), 'utf8')
 
   it('checks the company guard first, in the single registration path', () => {

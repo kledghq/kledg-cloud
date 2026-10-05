@@ -8,7 +8,13 @@
  *   organization's data cannot be reached;
  * - idempotent: a tiers is found again by its Qonto id (unique per company
  *   and kind), an invoice by its Qonto id (unique per company and source);
- *   running the import twice creates nothing twice;
+ *   running the import twice creates nothing twice; an invoice Kledg sent to
+ *   Qonto without receiving the answer (same customer, date and total) is
+ *   completed with its Qonto id instead of being imported a second time;
+ * - an invoice Kledg created as a draft in Qonto is found by its Qonto id
+ *   once finalized there: it gets its number and keeps its accounts;
+ * - imported numbers stay as Qonto gives them (origin QONTO): they never
+ *   go through Kledg's numbering series;
  * - an imported invoice already posted keeps its amounts (its entry is the
  *   books); only its Qonto status is refreshed;
  * - an invoice whose amounts do not add up is not imported, and reported;
@@ -128,10 +134,28 @@ async function saveInvoice(
   company: { siren: string; vatNumber: string | null },
   counters: Counters,
 ) {
-  const existing = await prisma.invoice.findFirst({
+  let existing = await prisma.invoice.findFirst({
     where: { companyId, source: 'QONTO', externalId: mapped.externalId },
     select: { id: true, entryId: true, externalStatus: true },
   })
+  // An invoice Kledg created in Qonto whose answer was lost (create-in-qonto.service.ts): the import completes it, never duplicates it.
+  let adopting = false
+  if (!existing && direction === 'SALE') {
+    existing = await prisma.invoice.findFirst({
+      where: {
+        companyId,
+        origin: 'QONTO',
+        externalId: null,
+        entryId: null,
+        tiersId,
+        issueDate: dayToDate(mapped.issueDate),
+        totalInclTax: centsToDecimal(mapped.totals.totalInclTaxCents),
+      },
+      select: { id: true, entryId: true, externalStatus: true },
+      orderBy: { createdAt: 'asc' },
+    })
+    adopting = existing !== null
+  }
   if (existing?.entryId) {
     if (existing.externalStatus !== mapped.status) {
       await prisma.invoice.update({ where: { id: existing.id }, data: { externalStatus: mapped.status } })
@@ -193,11 +217,17 @@ async function saveInvoice(
       // Still a draft (checked above, again under the row lock): replace its lines with the document's.
       const locked = await tx.$queryRaw<Array<{ entryId: string | null }>>`SELECT "entryId" FROM "invoices" WHERE "id" = ${existing.id} FOR UPDATE`
       if (locked[0]?.entryId) return
+      // The accounts and natures chosen in Kledg (a draft created in Qonto from Kledg, then finalized there) stay on the lines.
+      const kept = await tx.invoiceLine.findMany({ where: { invoiceId: existing.id }, orderBy: { position: 'asc' }, select: { accountCode: true, nature: true, fixedAsset: true } })
+      const lines =
+        kept.length === mapped.lines.length
+          ? { create: data.lines.create.map((line, i) => ({ ...line, accountCode: kept[i].accountCode, nature: kept[i].nature, fixedAsset: kept[i].fixedAsset })) }
+          : data.lines
       await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } })
       await tx.invoiceVatBreakdown.deleteMany({ where: { invoiceId: existing.id } })
-      await tx.invoice.update({ where: { id: existing.id }, data })
+      await tx.invoice.update({ where: { id: existing.id }, data: { ...data, lines, qontoDraft: false, ...(adopting ? { externalId: mapped.externalId } : {}) } })
     } else {
-      await tx.invoice.create({ data: { ...data, companyId, direction, source: 'QONTO', externalId: mapped.externalId } })
+      await tx.invoice.create({ data: { ...data, companyId, direction, source: 'QONTO', origin: 'QONTO', externalId: mapped.externalId } })
     }
   })
   if (existing) counters.invoices.updated += 1

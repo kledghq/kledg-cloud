@@ -12,6 +12,10 @@
  *   (ledger-accounts.ts), never taken as an id from the request;
  * - an invoice posts once: its row is locked and its entryId checked under
  *   the lock, so two concurrent posts create one entry and one 409;
+ * - a sales invoice of Kledg's series (origin AUTO) gets its number here,
+ *   in the posting transaction (numbering/series.ts): a posting that fails
+ *   or rolls back gives no number, and a number once given stays with the
+ *   invoice (unposting keeps it);
  * - unposting deletes the entry only while it is a draft and no payment is
  *   recorded on the invoice; a validated entry is corrected by a
  *   contre-passation (PCG art. 1031-3), not here.
@@ -27,8 +31,10 @@ import { calendarDayOf, formatIsoDateFr } from '@/lib/utils/date'
 import { centsToDecimal, parseCents } from '@/lib/utils/money'
 import { formatVatRate, isFrenchVatRate } from './amounts'
 import { accountByRoot, accountsByCode } from './ledger-accounts'
-import { lockInvoice, INVOICE_NOT_FOUND } from './manage-invoices.service'
+import { invoiceName, lockInvoice, INVOICE_NOT_FOUND } from './manage-invoices.service'
+import { assignSeriesNumber } from './numbering/series'
 import { planInvoiceEntry, vatAccountsNeeded, type PlanLine, type VatAccountKey } from './posting-plan'
+import { vatDeductionShareOn } from '@/lib/vat-deduction/coefficient'
 
 /** PCG roots of the VAT accounts (PCG art. 932-1; 44574 is a subdivision of 4457). */
 export const VAT_ACCOUNT_ROOTS: Record<VatAccountKey, { root: string; label: string }> = {
@@ -52,12 +58,28 @@ export interface PostResult {
   entryId: string
   entryNumber: string
   fiscalYear: number
+  /** The invoice's number (given by the series when it had none). */
+  number: string
 }
 
 export async function postInvoice(companyId: string, invoiceId: string, options: { source?: string } = {}): Promise<PostResult> {
+  // Share of the VAT of a purchase the company deducts on the invoice day (its
+  // provisional coefficient de déduction), read before the transaction; the
+  // date is checked again under the lock.
+  const header = await prisma.invoice.findFirst({ where: { id: invoiceId, companyId }, select: { direction: true, issueDate: true } })
+  const share = header?.direction === 'PURCHASE' ? await vatDeductionShareOn(companyId, header.issueDate) : null
+  const deductionPercent = share === null ? undefined : Math.round(share * 100)
   const result = await prisma.$transaction(async (tx) => {
     const locked = await lockInvoice(tx, companyId, invoiceId)
-    if (locked.entryId) throw new ConflictError(`La facture n° ${locked.number} est déjà comptabilisée.`)
+    if (locked.entryId) throw new ConflictError(`${invoiceName(locked)} est déjà comptabilisée.`)
+    if (locked.number === null && locked.origin === 'QONTO' && locked.qontoDraft && locked.externalId) {
+      throw new ConflictError(
+        'La facture est un brouillon dans Qonto : finalisez-la dans Qonto, puis importez les factures Qonto pour recevoir son numéro avant de la comptabiliser.',
+      )
+    }
+    if (locked.number === null && locked.origin !== 'AUTO') {
+      throw new ConflictError('Kledg attend la réponse de Qonto pour cette facture : reprenez sa création dans Qonto avant de la comptabiliser.')
+    }
     const invoice = await tx.invoice.findUniqueOrThrow({
       where: { id: invoiceId },
       select: {
@@ -76,6 +98,9 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
 
     // Fiscal year containing the invoice date: never another one.
     const day = calendarDayOf(invoice.issueDate) as string
+    if (header && (header.issueDate.getTime() !== invoice.issueDate.getTime() || header.direction !== invoice.direction)) {
+      throw new ConflictError('La facture a été modifiée pendant sa comptabilisation : réessayez.')
+    }
     const years = await tx.fiscalYear.findMany({ where: { companyId }, select: GUARDED_FISCAL_YEAR_SELECT, orderBy: { startDate: 'asc' } })
     const fiscalYear = fiscalYearContaining(years, day)
     if (!fiscalYear) {
@@ -132,7 +157,8 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       lines: planLines,
       breakdown,
       servicesVatOnDebits: company.servicesVatOnDebits,
-      vatExempt: company.isVatExempt,
+      vatExempt: company.isVatExempt && deductionPercent === undefined,
+      deductionPercent,
     })
     const vatAccounts: Partial<Record<VatAccountKey, string>> = {}
     for (const key of needed) {
@@ -140,8 +166,15 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       vatAccounts[key] = (await accountByRoot(tx, companyId, fiscalYear, root, label)).id
     }
 
+    // Last check passed: the series gives the number now, in this transaction.
+    let number = invoice.number
+    if (number === null) {
+      number = await assignSeriesNumber(tx, companyId, { id: invoiceId, typeCode: invoice.typeCode, issueDay: day })
+      await tx.invoice.update({ where: { id: invoiceId }, data: { number, numberAssignedAt: new Date() } })
+    }
+
     const kindLabel = invoice.typeCode === '381' ? 'Avoir' : 'Facture'
-    const description = `${kindLabel} ${invoice.number} ${invoice.tiers.name}`.slice(0, 250)
+    const description = `${kindLabel} ${number} ${invoice.tiers.name}`.slice(0, 250)
     const plan = planInvoiceEntry({
       direction: invoice.direction,
       typeCode: invoice.typeCode,
@@ -152,7 +185,8 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       tiers: { accountId: tiersAccount.id, auxiliaryAccountNumber: invoice.tiers.auxiliaryAccountNumber, name: invoice.tiers.name },
       vatAccounts,
       servicesVatOnDebits: company.servicesVatOnDebits,
-      vatExempt: company.isVatExempt,
+      vatExempt: company.isVatExempt && deductionPercent === undefined,
+      deductionPercent,
     })
 
     const entry = await createEntryInTx(tx, {
@@ -162,7 +196,7 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       date: day,
       pieceDate: day,
       description,
-      reference: invoice.number.slice(0, 200),
+      reference: number.slice(0, 200),
       status: 'draft',
       lines: plan.lines.map((line) => ({
         accountId: line.accountId,
@@ -175,7 +209,7 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
     })
     await tx.invoice.update({ where: { id: invoiceId }, data: { entryId: entry.id } })
     const created = await tx.accountingEntry.findUniqueOrThrow({ where: { id: entry.id }, select: { entryNumber: true } })
-    return { invoiceId, entryId: entry.id, entryNumber: created.entryNumber, fiscalYear: fiscalYear.year, number: invoice.number }
+    return { invoiceId, entryId: entry.id, entryNumber: created.entryNumber, fiscalYear: fiscalYear.year, number }
   }, TX_OPTIONS)
 
   await writeAuditLog('info', `Invoice posted: ${result.number}`, {
@@ -183,14 +217,14 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
     companyId,
     metadata: { invoiceId, entryId: result.entryId, source: options.source ?? 'web' },
   })
-  return { invoiceId, entryId: result.entryId, entryNumber: result.entryNumber, fiscalYear: result.fiscalYear }
+  return { invoiceId, entryId: result.entryId, entryNumber: result.entryNumber, fiscalYear: result.fiscalYear, number: result.number }
 }
 
 /** Deletes the draft entry of an invoice: the invoice is a draft again. */
 export async function unpostInvoice(companyId: string, invoiceId: string): Promise<{ invoiceId: string }> {
   const number = await prisma.$transaction(async (tx) => {
     const locked = await lockInvoice(tx, companyId, invoiceId)
-    if (!locked.entryId) throw new ConflictError(`La facture n° ${locked.number} n’est pas comptabilisée.`)
+    if (!locked.entryId) throw new ConflictError(`${invoiceName(locked)} n’est pas comptabilisée.`)
     // A customer payment confirmed in simple mode names the invoice, recorded on it or waiting for validation
     const simplePayments = await tx.simpleModeEntry.count({ where: { companyId, invoiceId } })
     if (simplePayments > 0) {

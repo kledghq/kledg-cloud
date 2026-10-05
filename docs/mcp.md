@@ -150,9 +150,13 @@ Le nettoyage est fait par la base de données (déclencheurs sur la table des au
 | `get_tiers_flows` | Flux d'un exercice avec les clients et les fournisseurs (diagramme de la page Tiers) : montant TTC facturé à chaque client et par chaque fournisseur, avoirs déduits, écritures validées seulement, hors règlements et à-nouveaux, total et part de chacun ; droit `reports:read` |
 | `list_doubtful_receivables` | Clients en retard à la clôture au-delà de 30, 60 ou 90 jours, candidats à une dépréciation, avec la dépréciation déjà suivie ; droit `reports:read` |
 | `list_tax_deadlines` | Échéances fiscales et juridiques d'un exercice (TVA, IS, liasse, CFE, CVAE, approbation et dépôt), jours restants, règle et sources officielles ; dates seulement, les statuts sont dans `list_declarations_status` ; droit `reports:read` |
+| `get_cash_forecast` | Prévision de trésorerie sur 3, 6 ou 12 mois, par mois ou par semaine ([prévision de trésorerie](prevision-tresorerie.md)) : solde du jour (banques, sinon comptes 512), factures clients et fournisseurs ouvertes à leur échéance, échéances fiscales au montant connu, paiements récurrents, et en hypothèses le budget et le rythme récent ; chaque période avec le détail par composante, le solde le plus bas, le seuil d'alerte et le premier jour sous le seuil ; une projection, pas une garantie ; droits `reports:read` et `banking:read` |
 | `get_vat_return` | Déclaration de TVA préparée d'une période (CA3 ou CA12, la prochaine due par défaut) : chaque ligne avec son numéro et sa case, montants des comptes et euros à saisir, lignes calculées ou à remplir à la main, montant dû ou crédit, échéance, contrôles et fiabilité des chiffres, écriture de liquidation, dépôt enregistré, sources ([déclarations de TVA](declarations-tva.md)) ; ne dépose rien ; droit `reports:read` |
 | `get_corporate_tax` | Impôt sur les sociétés préparé d'un exercice (celui dont le solde est dû par défaut, ou celui d'une échéance du calendrier) : résultat fiscal ligne par ligne avec la ligne de la 2033-B ou de la 2058-A (réintégrations lues dans les comptes, dividendes de filiales, lignes à la main), déficits et leur historique, taux de 15 % et 25 % avec les conditions du taux réduit, contribution sociale, crédits, solde du relevé 2572 et sa date, acomptes 2571 de l'exercice suivant, contrôles, sources ([impôt sur les sociétés](impot-societes.md)) ; ne dépose rien ; droit `reports:read` |
 | `simulate_remuneration` | Simulation indicative, jamais un conseil, de la rémunération et des dividendes du dirigeant associé d'une société à l'IS pour un exercice : résultat avant rémunération lu dans les comptes (à ce jour, projeté ou dernier exercice clos, 644 et 646 réintégrés) ou donné, statut d'après la forme juridique (assimilé salarié, gérant majoritaire non salarié), quatre scénarios côte à côte (tout en rémunération, tout en dividendes, mixte, optimum qui maximise le revenu net dans le bénéfice distribuable) avec coût pour la société, IS, réserve légale, cotisations approchées, prélèvements sociaux ou cotisations au-delà de 10 % du capital, impôt sur le revenu (PFU ou barème), net en poche, scénarios enregistrés, dividendes proposés à l'approbation, sources ([rémunération et dividendes](remuneration-dividendes.md)) ; droit `reports:read` |
+| `get_vat_deduction_coefficient` | Coefficient de déduction de TVA d'une année ([organisme de formation](organisme-de-formation.md)) : recettes par compte (ouvrant droit à déduction, exonérées, à classer, exclues), coefficient de taxation arrondi par excès, coefficients provisoire et définitif, régularisation avant le 25 avril et sa ligne de déclaration ; droit `reports:read` |
+| `get_training_report` | Bilan pédagogique et financier d'un exercice clos (cerfa 10443*17) : cadre C depuis les comptes et les origines affectées, cadre D, cadres saisis, contrôles de la notice, échéance ; droit `reports:read` |
+| `get_payroll_tax` | Taxe sur les salaires d'une année : assujettissement et rapport d'après les recettes de l'année précédente, calcul de la 2502 depuis les bases saisies par salarié, franchise, décote, abattement, fréquence des relevés 2501, échéances ; droit `reports:read` |
 | `get_local_taxes` | Impôts locaux d'une année ([impôts locaux](impots-locaux.md)) : CFE d'après l'avis saisi (situation de l'année de création, acompte du 15 juin et solde, charge prévue au 63511 par mois, cotisation minimum), CVAE calculée sur la valeur ajoutée des comptes et les ajustements (statut de l'année, taux maximal, seuils de 152 500 € et 500 000 €, taux effectif, dégrèvement, franchise, contribution complémentaire de 2025, acomptes), estimation du plafonnement, échéances avec leur statut, sources ; droit `reports:read` |
 | `list_declarations_status` | Échéances d'un exercice avec leur statut (à faire, déposée, payée, en retard, non due), ce qu'elles demandent, les dates et montants enregistrés, d'où ils viennent (suivi, déclarations de TVA, impôt sur les sociétés, approbation) et les champs verrouillés ; filtres par catégorie et statut ([échéances](echeances.md)) ; droit `reports:read` |
 | `get_bank_sync_status` | État des flux bancaires : connexions, dernière synchronisation, erreur, consentement, et par compte les opérations non rapprochées et la plus ancienne, sans IBAN ni identifiant ; droit `banking:read` |
@@ -162,11 +166,12 @@ Le nettoyage est fait par la base de données (déclencheurs sur la table des au
 | `get_ledger_report` | Grand livre (par compte, solde d'ouverture, lignes avec solde progressif, solde de clôture ; filtre par début de compte) ou journal (écritures par journal avec totaux) d'une période, 1 000 lignes au plus ; droit `reports:read` |
 | `list_fixed_assets` | Immobilisations avec comptes, valeurs, plan d'amortissement et totaux ; une immobilisation avec ses amortissements, l'état de ses dotations par exercice, les écritures auxquelles lier un amortissement ; droit `entries:read` |
 | `list_expense_category_rules` | Règles de mots-clés qui donnent la catégorie (et le compte) des lignes de notes de frais ; droit `entries:read` |
-| `get_company_settings` | Une section des paramètres de la société : fiche, établissements, membres, personnes, une personne (toutes ses données et ses liens, RGPD art. 15 et 20), associés, délai de paiement, options de TVA, mode simple, calendrier des échéances, régimes fiscaux, adresses ; logos et photos remplacés par leur présence ; droit `settings:read` |
+| `get_company_settings` | Une section des paramètres de la société : fiche, établissements, membres, personnes, une personne (toutes ses données et ses liens, RGPD art. 15 et 20), associés, délai de paiement, options de TVA, mode simple, calendrier des échéances, numérotation des factures (format, prochains numéros, création dans Qonto), prévision de trésorerie (seuil, horizon, composantes), régimes fiscaux, adresses ; logos et photos remplacés par leur présence ; droit `settings:read` |
 | `get_statement_layout` | Mise en page du bilan ou du compte de résultat (lignes, comptes, sens, ordre), une ligne, l'historique d'une ligne du bilan, les modèles du bilan ; droit `settings:read` |
 | `get_transaction_details` | Ce qu'il faut pour traiter une transaction bancaire : ligne de banque, exercices, contreparties proposées, règles qui la reconnaissent, règle qu'elle suggère ; droit `banking:read` |
 | `simulate_rule` | L'écriture qu'une règle d'affectation (enregistrée ou en cours d'écriture) passerait pour une transaction d'exemple, sans rien écrire ; droit `banking:read` |
-| `export_report` | Fichier d'un état, comme son bouton de téléchargement (même service, mêmes contrôles) : bilan et compte de résultat (PDF, Excel), annexe (PDF, Markdown), formulaires 2054, 2055 et 2033-C, impôt sur les sociétés, TVA, impôts locaux, rémunération (PDF, CSV), indicateurs financiers (CSV, Excel), balance âgée, balance auxiliaire et journal (Excel), vue de groupe (CSV, Excel) ; 5 Mo au plus ; droit `reports:export` (et `reports:read` dans chaque filiale lue pour le groupe) |
+| `list_rule_templates` | Bibliothèque de règles ([bibliothèque de règles](bibliotheque-de-regles.md)) : modèles de règles d'affectation (conditions, lignes, traitement de la TVA et sa raison, sources officielles), comptes rapprochés du plan de la société, modèles déjà ajoutés et règles proches, et suggestions classées par le nombre de transactions des 12 derniers mois que le modèle reconnaîtrait et qu'aucune règle ne reconnaît ; un modèle avec `templateId` ; droit `banking:read` |
+| `export_report` | Fichier d'un état, comme son bouton de téléchargement (même service, mêmes contrôles) : bilan et compte de résultat (PDF, Excel), annexe (PDF, Markdown), formulaires 2054, 2055 et 2033-C, impôt sur les sociétés, TVA, impôts locaux, rémunération (PDF, CSV), indicateurs financiers (CSV, Excel), balance âgée, balance auxiliaire et journal (Excel), prévision de trésorerie (CSV, droit `banking:read` en plus), vue de groupe (CSV, Excel) ; 5 Mo au plus ; droit `reports:export` (et `reports:read` dans chaque filiale lue pour le groupe) |
 | `get_qonto_statements` | Relevés mensuels des comptes Qonto (liste filtrée par compte, IBAN et période, ou un relevé), sans les liens de fichier de Qonto ; droit `banking:read` |
 | `list_qonto_receipts` | Justificatifs que Qonto détient pour une transaction de la société ; droit `banking:read` |
 | `get_file` | Un document en ressource intégrée : justificatif d'une transaction, PDF d'une facture importée de Qonto, PDF d'un relevé Qonto ; 5 Mo au plus ; droit `banking:read` (justificatif, relevé) ou `entries:read` (facture) |
@@ -207,6 +212,12 @@ Ces outils préparent du travail qu'une personne vérifie dans Kledg. Ils passen
 | `update_provision`, `update_investment_grant` | Remplacer une provision ou une subvention ; figées dès qu'un mouvement est validé | `entries:create` | Oui | Oui |
 | `update_draft_expense_report` | Remplacer la période, le libellé et les lignes d'une note de frais en brouillon (ou soumise, pour un valideur) ; Kledg recalcule montants et TVA | `expenses:submit` | Oui | Oui |
 | `reclassify_doubtful_receivable` | Reclasser une créance de 411 en 416 à la clôture, en **brouillon** | `entries:create` | Non | Non |
+| `save_vat_deduction_settings` | Régler le coefficient de déduction : assujetti partiel, estimation d'une première année, coefficient d'assujettissement, TVA supportée, traitement des comptes de produits | `entries:create` | Oui | Oui |
+| `prepare_vat_coefficient_regularisation` | Préparer la régularisation du coefficient de déduction d'une année terminée en **brouillon** (44566 / 758 ou 658 / 44566) | `entries:create` | Oui (brouillon périmé) | Oui |
+| `save_training_report` | Saisir les cadres du bilan pédagogique et financier d'un exercice (B, D, E, F, G) | `entries:create` | Oui | Oui |
+| `save_training_origins` | Affecter un compte de produits ou un client à une ligne du cadre C du BPF | `entries:create` | Oui | Oui |
+| `save_payroll_tax` | Saisir les bases annuelles par salarié et les réglages de la taxe sur les salaires d'une année | `entries:create` | Oui | Oui |
+| `prepare_payroll_tax_entry` | Préparer l'écriture de taxe sur les salaires (6311 / 447) en **brouillon** | `entries:create` | Oui (brouillon périmé) | Oui |
 | `save_local_taxes` | Saisir l'avis de CFE (total, acompte, date, note) et les ajustements de la valeur ajoutée de la CVAE d'une année | `entries:create` | Oui | Oui |
 | `prepare_cfe_entry` | Préparer l'écriture de CFE (acompte ou solde, 63511 / 512 ou 63511 / 447) en **brouillon** ; inchangée si elle correspond, jamais si elle est validée | `entries:create` | Oui (brouillon périmé) | Oui |
 | `save_corporate_tax_inputs` | Saisir ce que les comptes ne disent pas pour l'impôt sur les sociétés (capital libéré, 75 % de personnes physiques, déficits reportables, lignes à la main, acomptes versés) | `entries:create` | Oui | Oui |
@@ -246,12 +257,12 @@ L'assistant agit comme vous, dans la limite de votre rôle dans chaque société
 | `list_unlettered_lines` | Lignes non lettrées d'un compte de tiers (identifiants, montants, compte auxiliaire, solde progressif) et propositions de lettrage | `entries:read` | Non |
 | `letter_entry_lines` | Lettrer des lignes d'un compte de tiers : code suivant du compte et date du jour, débits égaux aux crédits, écritures validées, exercice ouvert | `entries:update` | Oui |
 | `unletter_entry_lines` | Délettrer un code d'un compte de tiers, dans un exercice ouvert | `entries:update` | Oui |
-| `create_draft_invoice` | Enregistrer une facture d'achat ou de vente en brouillon (lignes, plusieurs taux, totaux calculés par Kledg) et, sur demande, son écriture en brouillon dans l'exercice de sa date | `entries:create` | Oui |
+| `create_draft_invoice` | Enregistrer une facture d'achat ou de vente en brouillon (lignes, plusieurs taux, totaux calculés par Kledg) et, sur demande, son écriture en brouillon dans l'exercice de sa date ; une vente suit la numérotation de la société (`numbering` : créée dans Qonto, numérotée par Kledg à la comptabilisation, ou facture déjà émise avec son numéro ; `qontoStatus` : finalisée ou brouillon dans Qonto) | `entries:create` | Oui |
 | `manage_accounts` | Plan comptable : modifier un compte, supprimer un compte et ses sous-comptes, compléter le plan du PCG, semer le PCG, supprimer les comptes hors PCG | `ledger:manage` | Oui (suppressions) |
 | `manage_journals` | Modifier ou supprimer un journal sans écriture, rétablir les journaux par défaut | `ledger:manage` | Oui (suppression) |
 | `manage_fiscal_years` | Créer un exercice, changer les dates d'un exercice ouvert, supprimer un exercice ouvert sans écriture, clôturer les périodes jusqu'à un jour (PCG art. 1031-4) | `ledger:manage`, plus `closing:execute` pour la clôture des périodes | Oui (suppression, clôture des périodes) |
 | `import_accounting_file` | Importer un FEC, un CSV ou un Excel d'écritures (base64, 5 Mo au plus) ; l'aperçu donne les exercices du FEC | `entries:create` et `ledger:manage` | Oui |
-| `update_company_settings` | Fiche de la société, délai de paiement, options de TVA, mode simple, calendrier des échéances | `settings:update` | Oui |
+| `update_company_settings` | Fiche de la société, délai de paiement, options de TVA, mode simple, calendrier des échéances, numérotation des factures (et prochain numéro de la période, seulement à la hausse), seuil et réglages de la prévision de trésorerie | `settings:update` | Oui |
 | `manage_company_records` | Établissements, personnes (création, rectification, effacement dans les limites de la conservation légale, RGPD art. 16 et 17), associés, régimes fiscaux, adresses | `settings:update` | Oui |
 | `manage_statement_layout` | Mise en page du bilan et du compte de résultat (lignes, retour au PCG, historique, modèles) | `settings:update` | Oui |
 | `manage_members` | Ajouter un membre, changer son rôle, le retirer ; administrateurs de l'instance seulement, comme la page | `members:manage` et administrateur de l'instance | Oui |
@@ -259,9 +270,11 @@ L'assistant agit comme vous, dans la limite de votre rôle dans chaque société
 | `bulk_reconcile` | Pointer des transactions sans écriture, annuler leur rapprochement, rapprochement automatique avec le journal BQ, appliquer une règle à une transaction | `banking:reconcile` | Oui (annulation, rapprochement automatique) |
 | `delete_bank_transactions` | Supprimer des transactions bancaires | `banking:manage` | Oui |
 | `duplicate_rule` | Copier une règle d'affectation (désactivée) | `ledger:manage` | Non |
+| `add_rule_from_template` | Ajouter la règle d'un modèle de la bibliothèque, comptes rapprochés du plan de la société ; comptes manquants créés seulement avec `createMissingAccounts` ; refusé si la même règle existe, sauf `allowDuplicate` | `ledger:manage` | Non |
+| `copy_rules_from_company` | Copier des règles d'une autre société de l'utilisateur, comptes rapprochés du plan ; copies inactives par défaut, règles déjà présentes ignorées | `ledger:manage` ici, `banking:read` dans la société source | Non |
 | `sync_bank_data` | Synchroniser une intégration ou toutes, actualiser (synchronisation puis règles), copier les justificatifs de Qonto | `banking:reconcile` | Non |
 | `upload_receipt` | Envoyer le justificatif d'une transaction Qonto (JPEG, PNG ou PDF en base64, 5 Mo au plus) | `banking:reconcile` | Non |
-| `manage_invoice` | Comptabiliser une facture (écriture en brouillon), annuler cette comptabilisation, supprimer un brouillon, enregistrer ou retirer un règlement, lettrer une facture réglée ; lignes de banque candidates (lecture) | `entries:create`, `entries:delete` ou `entries:update` selon l'action | Oui (sauf la lecture) |
+| `manage_invoice` | Comptabiliser une facture (écriture en brouillon), annuler cette comptabilisation, supprimer un brouillon, enregistrer ou retirer un règlement, lettrer une facture réglée, reprendre la création dans Qonto d'une facture sans réponse de Qonto ; lignes de banque candidates (lecture) | `entries:create`, `entries:delete` ou `entries:update` selon l'action | Oui (sauf la lecture) |
 | `import_qonto_invoices` | Importer les clients et les factures de Qonto (idempotent) | `entries:create` et `banking:read` | Oui |
 | `delete_tiers` | Supprimer un client ou un fournisseur sans facture | `entries:delete` | Oui |
 | `delete_budget_items` | Supprimer un budget ou une ligne | `budgets:manage` | Oui |
@@ -324,6 +337,10 @@ Chaque action en contrôle total (pas les lectures `list_rules` et `list_bank_ac
 
 Chaque appel d'un outil de brouillons (sauf un aperçu `dryRun`) écrit `MCP_WRITE`, avec l'utilisateur, l'assistant, l'outil et les identifiants principaux. La préparation d'une action à approuver écrit `MCP_FULL_CONTROL_PENDING`, votre décision `MCP_ACTION_APPROVED` ou `MCP_ACTION_REJECTED`, et une exécution refusée (action non approuvée, refusée, déjà exécutée, expirée ou pour d'autres arguments) `MCP_FULL_CONTROL_REFUSED`. Les services écrivent en plus leurs propres entrées habituelles (clôture, affectation du résultat, rapprochement...).
 
+### Vues interactives
+
+Dans Claude et ChatGPT, les états financiers (`get_balance_sheet`, `get_income_statement`, `get_trial_balance`), les flux et la trésorerie (`get_tiers_flows`, `get_group_view`, `get_group_treasury`), les listes à traiter (`list_entries`, `list_bank_transactions`, `list_missing_receipts`), les factures et notes de frais (`get_invoice`, `get_expense_report`) et l'organigramme du groupe (`get_group_structure`) s'affichent en tableau, graphique ou fiche dans la conversation (extension MCP Apps). Leurs boutons passent par les mêmes outils : droits, approbation dans Kledg et journal d'audit inchangés. Les clients en texte seul reçoivent la même réponse qu'avant. Fonctionnement et sécurité : [mcp-views.md](mcp-views.md).
+
 ### Ce que le serveur ne fait pas
 
 À aucun niveau, contrôle total compris :
@@ -363,9 +380,11 @@ Ce que l'assistant peut faire de chaque fonctionnalité récente (L : lecture, `
 | Mode simple, dépenses et recettes à vérifier ([catégories simples](categories-simples.md)) | `list_expenses_to_review` | `accept_expense_suggestion`, `accept_all_expense_suggestions` (brouillons) | `validate_entries`, `upload_receipt`, `update_company_settings` (réglage de validation) | |
 | Justificatifs manquants | `list_missing_receipts` | | `upload_receipt` (Qonto) | |
 | Échéances fiscales et juridiques | `list_tax_deadlines` | | `update_company_settings` (réglages du calendrier) | |
+| Prévision de trésorerie ([prévision de trésorerie](prevision-tresorerie.md)) | `get_cash_forecast`, `get_company_settings` (seuil), `export_report` (CSV) | | `update_company_settings` (seuil, horizon, composantes) | |
 | Déclarations de TVA ([déclarations de TVA](declarations-tva.md)) | `get_vat_return`, `export_report` (PDF, CSV) | `prepare_vat_settlement` (brouillon), `record_tax_filing` (dépôt enregistré) | `validate_entries` | Déposer et payer (sur impots.gouv.fr) |
 | Impôt sur les sociétés ([impôt sur les sociétés](impot-societes.md)) | `get_corporate_tax`, `export_report` (PDF, CSV) | `prepare_corporate_tax_entry` (brouillon), `save_corporate_tax_inputs` (taux réduit, déficits, lignes à la main, acomptes versés), `record_tax_filing` | `validate_entries` | Déclarer et payer (sur impots.gouv.fr) |
 | Rémunération et dividendes ([rémunération et dividendes](remuneration-dividendes.md)) | `simulate_remuneration`, `export_report` (PDF, CSV) | `save_remuneration_scenario` (enregistrer, supprimer, proposer les dividendes à l'approbation) | | |
+| Organisme de formation, coefficient de déduction, taxe sur les salaires ([organisme de formation](organisme-de-formation.md)) | `get_vat_deduction_coefficient`, `get_training_report`, `get_payroll_tax`, `export_report` (BPF en CSV) | `save_vat_deduction_settings`, `save_training_report`, `save_training_origins`, `save_payroll_tax`, `prepare_vat_coefficient_regularisation`, `prepare_payroll_tax_entry` (brouillons) | | Déposer le BPF (sur Mon Activité Formation), déclarer et payer (sur impots.gouv.fr) |
 | Impôts locaux ([impôts locaux](impots-locaux.md)) | `get_local_taxes`, `export_report` (PDF, CSV) | `save_local_taxes`, `prepare_cfe_entry` (brouillon) | | Payer (sur impots.gouv.fr) |
 | Suivi des déclarations ([échéances](echeances.md)) | `list_declarations_status` | `mark_declaration` | | Joindre une pièce Qonto |
 | Indicateurs financiers, SIG et ratios ([indicateurs](indicateurs-financiers.md)) | `get_sig`, `get_financial_ratios`, `export_report` (CSV, Excel) | | | Widgets |
@@ -375,7 +394,7 @@ Ce que l'assistant peut faire de chaque fonctionnalité récente (L : lecture, `
 | Composition du capital | `get_capital_composition`, `get_company_settings` | | `manage_company_records` (associés, personnes) | |
 | Approbation des comptes ([approbation](approbation-des-comptes.md)) | `get_year_end_formalities` (statut et données manquantes) | `update_year_end_formalities` | | Générer, signer et déposer les documents |
 | Annexe et formulaires 2054, 2055, 2033-C ([annexe](annexe-et-2054.md)) | `get_annexe`, `get_fixed_asset_movements`, `export_report` (annexe en PDF ou Markdown, formulaires en PDF ou CSV) | `manage_accounting_methods`, `manage_accounting_changes` (écritures en brouillon), `update_annexe_notes` | `validate_entries` | |
-| Banque et rapprochement | `list_bank_transactions`, `get_bank_sync_status`, `get_transaction_details`, `simulate_rule`, `get_qonto_statements`, `list_qonto_receipts`, `get_file` | `create_draft_entry` | `list_bank_accounts`, `sync_bank`, `sync_bank_data`, `import_statement`, `reconcile_transaction`, `bulk_reconcile`, `run_rules`, `manage_bank_accounts`, `delete_bank_transactions`, `duplicate_rule`... | Connecter une banque |
+| Banque et rapprochement | `list_bank_transactions`, `get_bank_sync_status`, `get_transaction_details`, `simulate_rule`, `list_rule_templates`, `get_qonto_statements`, `list_qonto_receipts`, `get_file` | `create_draft_entry` | `list_bank_accounts`, `sync_bank`, `sync_bank_data`, `import_statement`, `reconcile_transaction`, `bulk_reconcile`, `run_rules`, `manage_bank_accounts`, `delete_bank_transactions`, `duplicate_rule`, `add_rule_from_template`, `copy_rules_from_company`... | Connecter une banque |
 | Écritures, plan comptable, journaux, exercices | `list_entries`, `get_entry`, `get_ledger_report`, `search_accounts`, `list_journals`, `list_fiscal_years` | `create_draft_entry`, `duplicate_entry`, `prepare_opening_balances` | `update_draft_entry`, `validate_entries`, `reverse_entry`, `delete_draft_entry`, `create_account`, `manage_accounts`, `create_journal`, `manage_journals`, `manage_fiscal_years`, `import_accounting_file` | Exports Excel du journal |
 | Immobilisations | `list_fixed_assets` | `save_depreciation_record` | `create_fixed_asset`, `manage_fixed_asset`, `manage_depreciation_record`, `generate_depreciation` | |
 | Paramètres de la société, membres, mise en page des états | `get_company_settings`, `get_statement_layout` | | `update_company_settings`, `manage_company_records`, `manage_statement_layout`, `manage_members` (administrateurs de l'instance) | Suppression définitive de société |
@@ -389,9 +408,9 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 
 | | Gestionnaires | Couverts par un outil | Exclus |
 | --- | --- | --- | --- |
-| Qui modifient des données (POST, PUT, PATCH, DELETE) | 215 | 175 | 40 |
-| Lectures (GET) | 167 | 141 | 26 |
-| Total | 382 | 316 | 66 |
+| Qui modifient des données (POST, PUT, PATCH, DELETE) | 226 | 186 | 40 |
+| Lectures (GET) | 179 | 153 | 26 |
+| Total | 405 | 339 | 66 |
 
 ### Exclusions
 
@@ -489,6 +508,9 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `DELETE /api/budgets/[id]` | budgets:manage | `delete_budget_items` (CT) |
 | `GET /api/budgets` | reports:read | `list_budgets` (L) |
 | `POST /api/budgets` | budgets:manage | `create_budget` (B) |
+| `GET /api/cash-forecast` | reports:read, banking:read | `get_cash_forecast` (L) |
+| `GET /api/cash-forecast/alert` | reports:read, banking:read | `get_cash_forecast` (L) ; l'alerte de seuil du tableau de bord est le champ alert de get_cash_forecast. |
+| `GET /api/cash-forecast/export` | reports:export, banking:read | `export_report` (L) |
 | `POST /api/companies/[id]/archive` | administrateur de l’instance | `archive_company` (CT) |
 | `DELETE /api/companies/[id]/archive` | administrateur de l’instance | `restore_company` (CT) |
 | `GET /api/companies/[id]/balance-sheet/compare` | reports:read | `get_balance_sheet` (L) ; Un appel par exercice. |
@@ -518,6 +540,8 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `PUT /api/companies/[id]/remuneration/scenarios` | closing:execute | `save_remuneration_scenario` (B) |
 | `DELETE /api/companies/[id]/remuneration/scenarios` | closing:execute | `save_remuneration_scenario` (B) |
 | `POST /api/companies/[id]/remuneration/propose-dividends` | closing:execute | `save_remuneration_scenario` (B), `update_year_end_formalities` (B) |
+| `GET /api/companies/[id]/cash-forecast-settings` | settings:read | `get_company_settings` (L) |
+| `PUT /api/companies/[id]/cash-forecast-settings` | settings:update | `update_company_settings` (CT) |
 | `GET /api/companies/[id]/deadline-settings` | settings:read | `get_company_settings` (L) |
 | `PUT /api/companies/[id]/deadline-settings` | settings:update | `update_company_settings` (CT) |
 | `PUT /api/companies/[id]/declarations/status` | entries:create | `mark_declaration` (B) |
@@ -555,6 +579,16 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `GET /api/companies/[id]/local-taxes/export` | reports:export | `export_report` (L) |
 | `GET /api/companies/[id]/local-taxes` | reports:read | `get_local_taxes` (L) |
 | `PUT /api/companies/[id]/local-taxes` | entries:create | `save_local_taxes` (B) |
+| `GET /api/companies/[id]/vat-deduction` | reports:read | `get_vat_deduction_coefficient` (L) |
+| `PUT /api/companies/[id]/vat-deduction` | entries:create | `save_vat_deduction_settings` (B) |
+| `POST /api/companies/[id]/vat-deduction/regularisation` | entries:create | `prepare_vat_coefficient_regularisation` (B) |
+| `GET /api/companies/[id]/training-report` | reports:read | `get_training_report` (L) |
+| `PUT /api/companies/[id]/training-report` | entries:create | `save_training_report` (B) |
+| `PUT /api/companies/[id]/training-report/origins` | entries:create | `save_training_origins` (B) |
+| `GET /api/companies/[id]/training-report/export` | reports:export | `export_report` (L) |
+| `GET /api/companies/[id]/payroll-tax` | reports:read | `get_payroll_tax` (L) |
+| `PUT /api/companies/[id]/payroll-tax` | entries:create | `save_payroll_tax` (B) |
+| `POST /api/companies/[id]/payroll-tax/entries` | entries:create | `prepare_payroll_tax_entry` (B) |
 | `PATCH /api/companies/[id]/members/[memberId]` | administrateur de l’instance | `manage_members` (CT) |
 | `DELETE /api/companies/[id]/members/[memberId]` | administrateur de l’instance | `manage_members` (CT) |
 | `GET /api/companies/[id]/members` | settings:read | `get_company_settings` (L) |
@@ -589,6 +623,8 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `DELETE /api/companies/[id]/vat-returns/filing` | entries:create | `record_tax_filing` (B) |
 | `GET /api/companies/[id]/vat-returns` | reports:read | `get_vat_return` (L) |
 | `POST /api/companies/[id]/vat-returns/settlement` | entries:create | `prepare_vat_settlement` (B) |
+| `GET /api/companies/[id]/invoice-numbering` | settings:read | `get_company_settings` (L) |
+| `PUT /api/companies/[id]/invoice-numbering` | settings:update | `update_company_settings` (CT) |
 | `GET /api/companies/[id]/vat-settings` | settings:read | `get_company_settings` (L) |
 | `PUT /api/companies/[id]/vat-settings` | settings:update | `update_company_settings` (CT) |
 | `GET /api/companies/lookup` | politique de création des sociétés | `lookup_siren` (L) |
@@ -689,6 +725,7 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `PATCH /api/invoices/[id]` | entries:update | `update_draft_invoice` (B) |
 | `DELETE /api/invoices/[id]` | entries:delete | `manage_invoice` (CT) |
 | `POST /api/invoices/[id]/settle` | entries:update | `manage_invoice` (CT) |
+| `POST /api/invoices/[id]/qonto` | entries:create | `manage_invoice` (CT) |
 | `POST /api/invoices/import-qonto` | entries:create | `import_qonto_invoices` (CT) |
 | `GET /api/invoices` | entries:read | `list_invoices` (L) |
 | `POST /api/invoices` | entries:create | `create_draft_invoice` (CT) |
@@ -749,6 +786,9 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `GET /api/reports/journal` | reports:read | `get_ledger_report` (L) |
 | `GET /api/reports/tiers-flows` | reports:read | `get_tiers_flows` (L) |
 | `GET /api/reports/trial-balance` | reports:read | `get_trial_balance` (L) |
+| `GET /api/rule-templates` | banking:read | `list_rule_templates` (L) |
+| `GET /api/rule-templates/[id]` | banking:read | `list_rule_templates` (L) |
+| `POST /api/rule-templates/[id]/accounts` | ledger:manage | `add_rule_from_template` (CT) ; Option createMissingAccounts de l'outil. |
 | `GET /api/simple/entries` | entries:read | `list_entries` (L) |
 | `POST /api/simple/expenses/[id]/confirm` | banking:reconcile | `accept_expense_suggestion` (B), `validate_entries` (CT) ; Brouillon, puis validation (entries:validate) quand la société ne demande pas la revue du comptable. |
 | `POST /api/simple/expenses/[id]/receipt` | banking:reconcile | `upload_receipt` (CT) |
@@ -773,6 +813,8 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `GET /api/transaction-rules` | banking:read | `list_rules` (CT) |
 | `POST /api/transaction-rules` | ledger:manage | `create_rule` (CT) |
 | `POST /api/transaction-rules/simulate` | banking:read | `simulate_rule` (L) |
+| `GET /api/transaction-rules/copy` | banking:read | `list_companies` (L), `list_rules` (CT) ; list_rules sur chaque autre société (droit banking:read dans chacune). |
+| `POST /api/transaction-rules/copy` | ledger:manage | `copy_rules_from_company` (CT) |
 | `POST /api/transactions/[id]/apply-rule` | banking:reconcile | `bulk_reconcile` (CT) |
 | `GET /api/transactions/[id]/create-rule` | banking:read | `get_transaction_details` (L) |
 | `GET /api/transactions/[id]/reconcile` | banking:read | `get_transaction_details` (L) |

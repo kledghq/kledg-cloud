@@ -21,6 +21,7 @@ import { DashboardDataProvider } from './dashboard-data'
 import { DashboardGrid, EditableDashboardGrid } from './dashboard-grid'
 import { WidgetCatalogue } from './widget-catalogue'
 import { guideVisible } from './widgets'
+import { CashForecastStatusCard, forecastPath } from '@/components/features/cash-forecast/cash-forecast-alert'
 
 interface FiscalYearOption {
   id: string
@@ -62,6 +63,8 @@ const EDIT_INSTRUCTIONS =
  */
 export function Dashboard({ companyId }: { companyId: string }) {
   const access = useCompanyAccess()
+  // The invitation to set a cash threshold goes to who may set it (company settings).
+  const canSetForecastThreshold = access.can({ settings: ['update'] })
   const router = useRouter()
   const searchParams = useSearchParams()
   const onboarding = useCompanyOnboarding(companyId)
@@ -238,6 +241,9 @@ export function Dashboard({ companyId }: { companyId: string }) {
       <p role="status" aria-live="polite" className="sr-only">
         {announcement}
       </p>
+
+      {/* The cash forecast status (docs/prevision-tresorerie.md): above the widgets, whatever the layout, loaded after the page. */}
+      {editing ? null : <CashForecastStatusCard companyId={companyId} mode="expert" href={forecastPath(companyId)} invite={canSetForecastThreshold} />}
 
       {editing ? (
         // Phones: the actions sit in a bar at the bottom of the screen (above
