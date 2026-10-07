@@ -431,18 +431,17 @@ export const CLOUD_FINDINGS = {
   'KLEDG-CLOUD-005': {
     id: 'KLEDG-CLOUD-005',
     title: 'Missed Stripe webhooks are never reconciled: an ended trial or subscription can stay writable',
-    status: 'open',
+    status: 'fixed',
+    fixedIn: '4609123',
     severity: 'low',
     cvss: 'CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N', // 3.1
     area: 'cloud/billing',
     note:
-      'The billing state is only what the webhook mirrored (state.ts never compares trialEnd or ' +
-      'currentPeriodEnd with the clock for trialing and active). If deliveries fail longer than Stripe retries ' +
-      '(3 days: wrong STRIPE_WEBHOOK_SECRET after a rotation, endpoint disabled, a 502 loop), trials that ' +
-      'ended and cancelled subscriptions stay writable indefinitely. Not exploitable by a customer alone; ' +
-      'hardening: a daily maintenance step that retrieves from Stripe the accounts whose trialEnd or ' +
-      'currentPeriodEnd passed more than a day ago and applies them like the webhook, plus an alert on webhook ' +
-      'failures. Documented only.',
+      'The billing state was only what the webhook mirrored (state.ts never compared trialEnd or ' +
+      'currentPeriodEnd with the clock for trialing and active). Fixed: a trialing snapshot, or an active one ' +
+      'that does not renew, two days past its end is read-only (reason billing_outdated), and the daily ' +
+      'maintenance reads again from Stripe every account whose trial or period ended (resyncStaleBillingAccounts, ' +
+      'same lock as the webhook). lib/cloud/billing/__tests__/state.test.ts, webhook-race.db.test.ts.',
   },
   'KLEDG-CLOUD-006': {
     id: 'KLEDG-CLOUD-006',
@@ -463,15 +462,75 @@ export const CLOUD_FINDINGS = {
   'KLEDG-CLOUD-007': {
     id: 'KLEDG-CLOUD-007',
     title: 'Cloud protections fail open when KLEDG_CLOUD_MODE or KLEDG_RLS is missing',
-    status: 'open',
+    status: 'fixed',
+    fixedIn: '50654b0',
     severity: 'info',
     area: 'cloud/config',
     note:
-      'Without KLEDG_CLOUD_MODE=true (a variable scoped to Preview only, a typo) the deployment serves the same ' +
-      'database as plain Kledg: REQUIRE_EMAIL_VERIFICATION is false, so unconfirmed sign-ups (squatted ' +
-      'addresses) can sign in, and no plan limit or read-only state applies. Cloud mode does not require ' +
-      'KLEDG_RLS=enforce either. Production configuration check (report); a start-up assertion that refuses to ' +
-      'serve when cloud tables hold accounts but the flags are off would make it fail closed. Documented only.',
+      'Cloud mode did not require KLEDG_RLS=enforce. Fixed with a Kledg core hook (requiresRowLevelSecurity, ' +
+      'core 7fde9d8): in cloud mode the server refuses to start and the database client to open without ' +
+      'KLEDG_RLS=enforce, with an error naming the variable. A deployment without KLEDG_CLOUD_MODE=true still ' +
+      'behaves as plain Kledg (a configuration check of the go-live list, docs/cloud.md). ' +
+      'lib/cloud/__tests__/policy.test.ts.',
+  },
+  'KLEDG-R3-CLOUD-01': {
+    id: 'KLEDG-R3-CLOUD-01',
+    title: 'SIREN, SIRET and slug unique across tenants: a trial squats a business SIREN, any customer probes others',
+    status: 'fixed',
+    fixedIn: '6288b47',
+    severity: 'medium',
+    area: 'cloud/tenancy',
+    note:
+      'Kledg core (ceb8195) checks SIREN and SIRET within a scope given by the instance policy and can give ' +
+      'slugs a random suffix; the cloud scopes them to the billing account, turns the suffix on and drops the ' +
+      'instance-wide unique indexes (migration 20261123100000_cloud_identifier_scope). ' +
+      'lib/cloud/__tests__/identifiers.db.test.ts.',
+  },
+  'KLEDG-R3-CLOUD-02': {
+    id: 'KLEDG-R3-CLOUD-02',
+    title: 'Concurrent Stripe events: an older subscription snapshot overwrites a newer one',
+    status: 'fixed',
+    fixedIn: '4609123',
+    severity: 'medium',
+    area: 'cloud/billing',
+    note:
+      'applyStripeEvent takes the billing account advisory lock, then reads Stripe and writes in the same ' +
+      'transaction; the read time (database clock) is kept in stripeSyncedAt and an older read is never ' +
+      'written. lib/cloud/billing/__tests__/webhook-race.db.test.ts.',
+  },
+  'KLEDG-R3-CLOUD-03': {
+    id: 'KLEDG-R3-CLOUD-03',
+    title: 'Same-origin referrers (company slug, query) can reach Vercel Web Analytics',
+    status: 'fixed',
+    fixedIn: 'c8f2500',
+    severity: 'low',
+    area: 'cloud/privacy',
+    note:
+      'Kledg core (aca7833) sends Referrer-Policy: strict-origin on every response. ' +
+      'components/cloud/__tests__/cloud-analytics.test.ts, core lib/__tests__/security-headers.test.ts.',
+  },
+  'KLEDG-R3-CLOUD-04': {
+    id: 'KLEDG-R3-CLOUD-04',
+    title: 'RLS lets tenants write their billing state and members delete or re-point ownership rows',
+    status: 'fixed',
+    fixedIn: '3a53d10',
+    severity: 'low',
+    area: 'cloud/rls',
+    note:
+      'Ownership rows are written by unrestricted contexts only; a trigger keeps the billing columns of ' +
+      'cloud_billing_accounts to Stripe, the maintenance and the operator (migration ' +
+      '20261123110000_cloud_billing_guards). lib/cloud/__tests__/cloud-rls.db.test.ts.',
+  },
+  'KLEDG-R3-CLOUD-07': {
+    id: 'KLEDG-R3-CLOUD-07',
+    title: 'Sign-up mail limits per exact IPv6 address and per exact address, no global cap',
+    status: 'fixed',
+    fixedIn: '611d17d',
+    severity: 'low',
+    area: 'cloud/signup',
+    note:
+      'Per-mailbox limit (no +tag, Gmail without dots), IPv6 counted per /64 (core 47b3bcf), instance-wide cap ' +
+      'cloud-signup-global. lib/cloud/signup/__tests__/signup.db.test.ts.',
   },
 } as const satisfies Record<string, Finding>
 
