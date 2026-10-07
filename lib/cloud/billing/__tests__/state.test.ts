@@ -121,6 +121,23 @@ describe('billing state', () => {
     expect(billingAccess(snapshot({ subscriptionStatus: 'active', planId: 'toString' }), now, settings)).toMatchObject({ planId: null, companyLimit: 0 })
   })
 
+  it('[KLEDG-CLOUD-005] stops believing a trial or a cancelled period two days past its end: read-only until reconciled', () => {
+    const trialEnd = new Date('2026-11-07T09:00:00Z')
+    const trial = snapshot({ subscriptionStatus: 'trialing', planId: 'holding', trialEnd })
+    // Within the margin: still the trial (the webhook usually lands within minutes).
+    expect(billingAccess(trial, addDays(trialEnd, 1.9), settings)).toMatchObject({ phase: 'trial', writable: true })
+    expect(billingAccess(trial, addDays(trialEnd, 2.1), settings)).toMatchObject({ phase: 'read_only', writable: false, reason: 'billing_outdated', companyLimit: 0 })
+
+    const end = new Date('2026-11-01T00:00:00Z')
+    const cancelled = snapshot({ subscriptionStatus: 'active', planId: 'holding', cancelAtPeriodEnd: true, currentPeriodEnd: end })
+    expect(billingAccess(cancelled, addDays(end, 1), settings)).toMatchObject({ phase: 'active', writable: true, endsAt: end })
+    expect(billingAccess(cancelled, addDays(end, 3), settings)).toMatchObject({ phase: 'read_only', writable: false, reason: 'billing_outdated' })
+
+    // A period that renews is left to the reconciliation: a paying customer is never cut off for a late renewal event.
+    const renewing = snapshot({ subscriptionStatus: 'active', planId: 'holding', currentPeriodEnd: end })
+    expect(billingAccess(renewing, addDays(end, 3), settings)).toMatchObject({ phase: 'active', writable: true })
+  })
+
   it('knows which statuses still bill and which ended', () => {
     expect(['active', 'trialing', 'past_due', 'unpaid', 'paused'].every(hasLiveSubscription)).toBe(true)
     expect([null, 'canceled', 'incomplete', 'incomplete_expired'].some(hasLiveSubscription)).toBe(false)

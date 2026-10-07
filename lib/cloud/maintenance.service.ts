@@ -14,9 +14,14 @@
  *   (they hold nothing, and keeping them would let anyone squat an address);
  * - Stripe event ids older than 90 days.
  *
+ * - accounts whose trial or billing period ended without the webhook telling
+ *   (deliveries failed longer than Stripe retries), read again from Stripe
+ *   (KLEDG-CLOUD-005).
+ *
  * Billing states need no job: they follow from the stored dates
- * (lib/cloud/billing/state.ts). Every step is idempotent: a run that fails
- * halfway is completed by the next one.
+ * (lib/cloud/billing/state.ts; a trial or a cancelled period still running
+ * two days after its end is read-only until reconciled). Every step is
+ * idempotent: a run that fails halfway is completed by the next one.
  */
 
 import { timingSafeEqual } from 'node:crypto'
@@ -30,7 +35,7 @@ import { logger } from '@/lib/logger'
 import { CLOUD_PATHS, cloudSettings } from './config'
 import { addDays } from './billing/state'
 import { PLANS, isPlanId } from './billing/plans'
-import { purgeProcessedStripeEvents } from './billing/stripe-webhook.service'
+import { purgeProcessedStripeEvents, resyncStaleBillingAccounts } from './billing/stripe-webhook.service'
 import { syncAllCabinetExtraCompanies } from './billing/cabinet-extra.service'
 import { executeDueDeletions } from './account/account-deletion.service'
 import { contractEndedEmail, renewalReminderEmail } from './email-templates'
@@ -141,6 +146,7 @@ export async function purgeUnverifiedAccounts(now: Date = new Date()): Promise<n
 }
 
 export interface MaintenanceReport {
+  billingResynced: number
   renewalReminders: number
   endedContracts: number
   deletions: { done: number; failed: number }
@@ -156,6 +162,8 @@ export async function runCloudMaintenance(now: Date = new Date(), stripe?: () =>
 
 async function runMaintenanceSteps(now: Date, stripe?: () => Stripe): Promise<MaintenanceReport> {
   const report: MaintenanceReport = {
+    // First: the steps below read the states it corrects (an ended trial gets its notice the same run).
+    billingResynced: await resyncStaleBillingAccounts(stripe, now),
     renewalReminders: await sendRenewalReminders(now),
     endedContracts: await noticeEndedContracts(now),
     deletions: await executeDueDeletions(now, stripe),

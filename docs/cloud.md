@@ -138,6 +138,13 @@ report, FEC and export keeps working, for every member of the company.
 - The webhook checks the Stripe signature on the raw body (5 minute
   tolerance), reads the subscription again from Stripe instead of trusting
   the event, and records the event id in the same transaction as its effect.
+  Events about one account are applied one at a time: the transaction takes
+  the account's advisory lock before reading Stripe, so a delivery that read
+  an older state can never commit after a newer one (KLEDG-R3-CLOUD-02).
+- Missed webhooks (KLEDG-CLOUD-005): a trial, or a period that does not
+  renew, still mirrored as running two days after its end is read-only
+  (`billing_outdated`), and the daily maintenance reads again from Stripe
+  every account whose trial or period ended (`resyncStaleBillingAccounts`).
 - No secret in the repository: keys come from the environment, prices from
   Stripe by lookup key.
 - Row level security (`KLEDG_RLS=enforce`): the cloud tables have their own
@@ -271,9 +278,6 @@ légales), and the support address shown in the emails.
 
 ## Known limitations
 
-- A SIREN is unique on the instance: a company already held by another
-  customer cannot be created twice (only its existence can be inferred).
-  The operator resolves such cases.
 - Members are added by instance administrators (Kledg's rule): customers
   cannot invite their accountant themselves yet.
 - Customers cannot archive or delete a company to free a slot of their

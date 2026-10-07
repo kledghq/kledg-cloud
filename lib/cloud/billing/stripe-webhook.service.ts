@@ -129,8 +129,9 @@ export function verifyStripeEvent(rawBody: string, signature: string | null, now
 }
 
 interface Target {
-  account: CloudBillingAccount
-  subscription: Stripe.Subscription
+  /** The billing account the event is about (read again under its lock before the write). */
+  accountId: string
+  subscriptionId: string
 }
 
 async function accountByCustomer(customerId: string | null, metadataAccountId?: string | null): Promise<CloudBillingAccount | null> {
@@ -146,8 +147,8 @@ async function accountByCustomer(customerId: string | null, metadataAccountId?: 
   return null
 }
 
-/** The account and the current subscription the event is about, or why it is ignored. */
-async function resolveTarget(event: Stripe.Event, stripe: Stripe): Promise<Target | Extract<WebhookOutcome, { status: 'ignored' }>> {
+/** The account and the subscription the event is about, or why it is ignored. Reads the database only. */
+async function resolveTarget(event: Stripe.Event): Promise<Target | Extract<WebhookOutcome, { status: 'ignored' }>> {
   let subscriptionId: string | null = null
   let account: CloudBillingAccount | null = null
 
@@ -184,48 +185,145 @@ async function resolveTarget(event: Stripe.Event, stripe: Stripe): Promise<Targe
     logger.warn('Stripe event for a customer without a billing account', { eventId: event.id, type: event.type })
     return { status: 'ignored', reason: 'unknown_customer' }
   }
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price.product', 'discounts.source.coupon'] })
-  // An old subscription ending must not replace the one the account pays now.
-  if (account.stripeSubscriptionId && account.stripeSubscriptionId !== subscription.id && ENDED.has(subscription.status)) {
-    return { status: 'ignored', reason: 'stale_subscription' }
-  }
-  return { account, subscription }
+  return { accountId: account.id, subscriptionId }
 }
 
-/** Applies a verified event, once. */
+/** Lock of a billing account's billing state, the key recordCompanyOwnership uses too. */
+async function lockBillingAccount(tx: Prisma.TransactionClient, accountId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`kledg-cloud:billing:${accountId}`}))`
+}
+
+/**
+ * Upper bound of a webhook transaction: it waits for the account's lock,
+ * then reads the subscription from Stripe (the client times out sooner).
+ * Past it the delivery fails and Stripe retries.
+ */
+const APPLY_TIMEOUT_MS = 60_000
+
+/**
+ * Reads the subscription from Stripe and mirrors it on the account, inside
+ * a transaction that holds the account's lock (lockBillingAccount). `event`
+ * is the webhook event that asked for it, absent for the daily
+ * reconciliation (resyncStaleBillingAccounts).
+ */
+async function writeSubscription(
+  tx: Prisma.TransactionClient,
+  target: Target,
+  stripe: Stripe,
+  now: Date,
+  event?: Pick<Stripe.Event, 'type' | 'created'>,
+): Promise<WebhookOutcome> {
+  // Under the lock: the account as the previous event left it, then Stripe's subscription as it is now.
+  const account = await tx.cloudBillingAccount.findUnique({ where: { id: target.accountId } })
+  if (!account) return { status: 'ignored', reason: 'unknown_customer' } as const
+  // The database clock, the same for every server: under the lock, a later delivery always reads later.
+  const [{ readAt }] = await tx.$queryRaw<{ readAt: Date }[]>`SELECT clock_timestamp() AS "readAt"`
+  const subscription = await stripe.subscriptions.retrieve(target.subscriptionId, {
+    expand: ['items.data.price.product', 'discounts.source.coupon'],
+  })
+  // An old subscription ending must not replace the one the account pays now.
+  if (account.stripeSubscriptionId && account.stripeSubscriptionId !== subscription.id && ENDED.has(subscription.status)) {
+    return { status: 'ignored', reason: 'stale_subscription' } as const
+  }
+  // Never an older read over a newer one (a delivery whose lock wait outlived another's whole run).
+  if (account.stripeSyncedAt && account.stripeSyncedAt > readAt) return { status: 'ignored', reason: 'stale_subscription' } as const
+
+  const fields = subscriptionFields(subscription)
+  const customerId = idOf(subscription.customer)
+  const paymentIssue = PAYMENT_ISSUE.has(subscription.status)
+  const eventAt = (event && fromUnix(event.created)) ?? now
+  // A client who subscribes again during the retrieval period keeps everything.
+  const comeback = hasLiveSubscription(subscription.status) && account.deletionReason === 'contract_ended'
+  await tx.cloudBillingAccount.update({
+    where: { id: account.id },
+    data: {
+      ...fields,
+      ...(customerId && !account.stripeCustomerId ? { stripeCustomerId: customerId } : {}),
+      // One free trial per client (CGV art. 5).
+      ...(subscription.trial_start ? { trialUsed: true } : {}),
+      ...(comeback ? { deletionScheduledFor: null, deletionReason: null, contractEndNoticeFor: null } : {}),
+      // The first failure of an incident starts the grace period; a paid subscription clears it.
+      paymentFailedAt: paymentIssue ? (account.paymentFailedAt ?? (event?.type === 'invoice.payment_failed' ? eventAt : now)) : null,
+      stripeSyncedAt: readAt,
+    },
+  })
+  return { status: 'applied', billingAccountId: account.id } as const
+}
+
+/**
+ * Applies a verified event, once.
+ *
+ * Events about one account are applied one at a time (KLEDG-R3-CLOUD-02):
+ * the transaction takes the account's advisory lock, then reads the
+ * subscription from Stripe and writes it. Two deliveries at once (Stripe
+ * sends customer.subscription.updated and .deleted together on a
+ * cancellation, plus invoice events) can then never commit an older read
+ * after a newer one; a snapshot read before the stored one
+ * (stripeSyncedAt, the time of the read) is not written either.
+ */
 export async function applyStripeEvent(event: Stripe.Event, stripe: Stripe = getStripe(), now: Date = new Date()): Promise<WebhookOutcome> {
   if (await prisma.cloudStripeEvent.findUnique({ where: { id: event.id }, select: { id: true } })) return { status: 'duplicate' }
 
-  const target = await resolveTarget(event, stripe)
+  const target = await resolveTarget(event)
 
-  return prisma.$transaction(async (tx) => {
-    // The primary key serializes concurrent deliveries of the same event: the second one waits, then finds it.
-    const inserted = await tx.cloudStripeEvent.createMany({ data: [{ id: event.id, type: event.type }], skipDuplicates: true })
-    if (inserted.count === 0) return { status: 'duplicate' } as const
-    if (!('account' in target)) return target
+  return prisma.$transaction(
+    async (tx) => {
+      if ('accountId' in target) await lockBillingAccount(tx, target.accountId)
+      // The primary key serializes concurrent deliveries of the same event: the second one waits, then finds it.
+      const inserted = await tx.cloudStripeEvent.createMany({ data: [{ id: event.id, type: event.type }], skipDuplicates: true })
+      if (inserted.count === 0) return { status: 'duplicate' } as const
+      if (!('accountId' in target)) return target
 
-    const { account, subscription } = target
-    const fields = subscriptionFields(subscription)
-    const customerId = idOf(subscription.customer)
-    const paymentIssue = PAYMENT_ISSUE.has(subscription.status)
-    const eventAt = fromUnix(event.created) ?? now
-    // A client who subscribes again during the retrieval period keeps everything.
-    const comeback = hasLiveSubscription(subscription.status) && account.deletionReason === 'contract_ended'
-    await tx.cloudBillingAccount.update({
-      where: { id: account.id },
-      data: {
-        ...fields,
-        ...(customerId && !account.stripeCustomerId ? { stripeCustomerId: customerId } : {}),
-        // One free trial per client (CGV art. 5).
-        ...(subscription.trial_start ? { trialUsed: true } : {}),
-        ...(comeback ? { deletionScheduledFor: null, deletionReason: null, contractEndNoticeFor: null } : {}),
-        // The first failure of an incident starts the grace period; a paid subscription clears it.
-        paymentFailedAt: paymentIssue ? (account.paymentFailedAt ?? (event.type === 'invoice.payment_failed' ? eventAt : now)) : null,
-        stripeSyncedAt: now,
-      },
-    })
-    return { status: 'applied', billingAccountId: account.id } as const
+      return writeSubscription(tx, target, stripe, now, event)
+    },
+    { maxWait: APPLY_TIMEOUT_MS, timeout: APPLY_TIMEOUT_MS },
+  )
+}
+
+/** Time after a trial end or a billing period end before the daily reconciliation asks Stripe again. */
+const RESYNC_AFTER_MS = 60 * 60 * 1000
+
+/**
+ * Daily reconciliation (KLEDG-CLOUD-005): the accounts whose mirrored trial
+ * or billing period ended, which a webhook should have updated, read their
+ * subscription from Stripe again and write it like an event would (same
+ * lock). Covers deliveries that failed longer than Stripe retries (a
+ * rotated STRIPE_WEBHOOK_SECRET, a disabled endpoint). Returns how many
+ * accounts were read; a failure is logged and retried on the next run.
+ */
+export async function resyncStaleBillingAccounts(stripe: () => Stripe = getStripe, now: Date = new Date()): Promise<number> {
+  const passed = new Date(now.getTime() - RESYNC_AFTER_MS)
+  const stale = await prisma.cloudBillingAccount.findMany({
+    where: {
+      stripeSubscriptionId: { not: null },
+      OR: [
+        { subscriptionStatus: 'trialing', OR: [{ trialEnd: { lt: passed } }, { trialEnd: null, currentPeriodEnd: { lt: passed } }] },
+        { subscriptionStatus: { in: ['active', 'past_due', 'unpaid'] }, currentPeriodEnd: { lt: passed } },
+      ],
+    },
+    select: { id: true, stripeSubscriptionId: true },
+    orderBy: { stripeSyncedAt: { sort: 'asc', nulls: 'first' } },
+    take: 200,
   })
+  if (stale.length === 0) return 0
+  const client = stripe()
+  let read = 0
+  for (const account of stale) {
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          await lockBillingAccount(tx, account.id)
+          return writeSubscription(tx, { accountId: account.id, subscriptionId: account.stripeSubscriptionId! }, client, now)
+        },
+        { maxWait: APPLY_TIMEOUT_MS, timeout: APPLY_TIMEOUT_MS },
+      )
+      read += 1
+    } catch (error) {
+      logger.error('Billing account reconciliation with Stripe failed, retried on the next run', { error, billingAccountId: account.id })
+    }
+  }
+  logger.warn('Billing accounts read again from Stripe: some webhook deliveries were missed', { count: read })
+  return read
 }
 
 /** Verifies, then applies (the route's whole job). */

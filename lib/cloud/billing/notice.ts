@@ -65,7 +65,7 @@ export function billingNotice(access: BillingAccess, now: Date, options: { hasCo
           link: DATA_LINK,
         }
       }
-      return { tone: 'warning', text: readOnlyMessage(access), link: access.reason === 'payment_failed' ? MANAGE_LINK : PLANS_LINK }
+      return { tone: 'warning', text: readOnlyMessage(access), link: access.reason === 'payment_failed' || access.reason === 'billing_outdated' ? MANAGE_LINK : PLANS_LINK }
     case 'active':
       return access.endsAt ? { tone: 'info', text: `Votre abonnement prend fin le ${frenchDay(access.endsAt)}.`, link: MANAGE_LINK } : null
   }

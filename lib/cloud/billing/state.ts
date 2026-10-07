@@ -17,6 +17,10 @@
  *   paused: read-only
  *   deletion requested: read-only for 30 days, cancellable, then deletion
  *     (CGV art. 15)
+ *   trialing past its end, or active past the end of a period that does not
+ *     renew, by more than 2 days: the webhook missed the change Stripe made
+ *     then (KLEDG-CLOUD-005), read-only until the daily reconciliation
+ *     (resyncStaleBillingAccounts) reads the subscription again
  *
  * Read-only never hides anything: reading, the FEC and the full data export
  * stay available. Only writes and new companies are refused
@@ -28,7 +32,7 @@ import { PLANS, type PlanId } from './plans'
 export type BillingPhase = 'none' | 'trial' | 'active' | 'grace' | 'read_only'
 
 /** Why an account is in grace, read-only, or has nothing yet. */
-export type BillingReason = 'no_subscription' | 'payment_failed' | 'contract_ended' | 'paused' | 'deletion_requested'
+export type BillingReason = 'no_subscription' | 'payment_failed' | 'contract_ended' | 'paused' | 'deletion_requested' | 'billing_outdated'
 
 /** What the state needs from a billing account row. */
 export interface BillingSnapshot {
@@ -66,6 +70,14 @@ export interface BillingAccess {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How long past a trial end, or the end of a period that does not renew, a
+ * snapshot still saying "trialing" or "active" is believed: Stripe changes
+ * the subscription at that date and its webhook normally arrives within
+ * minutes; the daily reconciliation catches up the rest (KLEDG-CLOUD-005).
+ */
+export const STALE_SNAPSHOT_MS = 2 * 24 * 60 * 60 * 1000
 
 export function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * DAY_MS)
@@ -121,14 +133,21 @@ export function billingAccess(snapshot: BillingSnapshot, now: Date, settings: { 
 
   if (snapshot.deletionScheduledFor && snapshot.deletionReason === 'requested') return readOnly('deletion_requested')
 
+  // A date Stripe acted on long ago without the webhook telling: the snapshot is out of date (KLEDG-CLOUD-005).
+  const outdated = (end: Date | null) => end !== null && now.getTime() > end.getTime() + STALE_SNAPSHOT_MS
+
   if (status === 'trialing') {
+    const trialEndsAt = snapshot.trialEnd ?? snapshot.currentPeriodEnd
+    if (outdated(trialEndsAt)) return readOnly('billing_outdated', { trialEndsAt })
     // A trial is free and needs no card: Cabinet's companies beyond the 25 included are billed only once
     // it is paid, so the trial stops at the included ones (KLEDG-CLOUD-003).
     const trialLimit = plan ? (PLANS[plan].companyLimit ?? PLANS[plan].includedCompanies) : 0
-    return { ...base, phase: 'trial', writable: true, companyLimit: trialLimit, trialEndsAt: snapshot.trialEnd ?? snapshot.currentPeriodEnd }
+    return { ...base, phase: 'trial', writable: true, companyLimit: trialLimit, trialEndsAt }
   }
   if (status === 'active') {
-    return { ...base, phase: 'active', writable: true, endsAt: snapshot.cancelAtPeriodEnd ? snapshot.currentPeriodEnd : null }
+    const endsAt = snapshot.cancelAtPeriodEnd ? snapshot.currentPeriodEnd : null
+    if (outdated(endsAt)) return readOnly('billing_outdated', { endsAt })
+    return { ...base, phase: 'active', writable: true, endsAt }
   }
   if (status && PAYMENT_ISSUE_STATUSES.has(status)) {
     const readOnlyAt = addDays(snapshot.paymentFailedAt ?? snapshot.currentPeriodEnd ?? now, settings.graceDays)
