@@ -51,15 +51,24 @@ export async function cloudCompanyCreationRefusal(actor: InstanceActor, now: Dat
   return null
 }
 
+/**
+ * Records that `actor`'s account owns the company they just created, and
+ * bills Cabinet's extra companies. Runs in a system context: ownership rows
+ * and billing columns are written by unrestricted contexts only (row level
+ * security, KLEDG-R3-CLOUD-04); `actor` is the signed-in creator and
+ * `companyId` the company this request created.
+ */
 export async function cloudAfterCompanyCreated(companyId: string, actor: InstanceActor): Promise<void> {
   if (actor.role === 'admin') return
-  const account = await recordCompanyOwnership(companyId, actor.id)
-  if (account.planId === 'cabinet') {
-    // Billed beyond 25 companies; a Stripe failure is caught up by the daily maintenance.
-    await syncCabinetExtraCompanies(account).catch((error: unknown) =>
-      logger.error('Cabinet extra companies sync failed after a creation', { error, billingAccountId: account.id }),
-    )
-  }
+  await withSystemContext('instance-extension', async () => {
+    const account = await recordCompanyOwnership(companyId, actor.id)
+    if (account.planId === 'cabinet') {
+      // Billed beyond 25 companies; a Stripe failure is caught up by the daily maintenance.
+      await syncCabinetExtraCompanies(account).catch((error: unknown) =>
+        logger.error('Cabinet extra companies sync failed after a creation', { error, billingAccountId: account.id }),
+      )
+    }
+  })
 }
 
 /**

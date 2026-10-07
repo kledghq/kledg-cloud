@@ -4,8 +4,10 @@
  * KLEDG_RLS=enforce with the application role:
  * - a billing account is read by its owner and by the members of the
  *   companies it owns (the read-only check runs for them), written by its
- *   owner only; another user sees nothing;
- * - ownership rows follow the companies' reachability;
+ *   owner only, and never on its billing state (plan, status, dates: Stripe
+ *   and the operator only, KLEDG-R3-CLOUD-04); another user sees nothing;
+ * - ownership rows are read for reachable companies, written by
+ *   unrestricted contexts only (KLEDG-R3-CLOUD-04);
  * - terms acceptances are each user's own;
  * - Stripe event ids are reachable by unrestricted contexts only;
  * - without a context nothing is read and writes are refused.
@@ -69,11 +71,64 @@ describe.skipIf(!available)('row level security of the cloud tables', () => {
 
   it('lets only the owner write its billing account', async () => {
     const update = (userId: string) =>
-      withUserContext(userId, () => prisma.cloudBillingAccount.updateMany({ where: { id: 'ba-owner' }, data: { planId: 'cabinet' } }))
+      withUserContext(userId, () => prisma.cloudBillingAccount.updateMany({ where: { id: 'ba-owner' }, data: { deletionReason: 'requested', deletionRequestedAt: new Date(), deletionScheduledFor: new Date() } }))
     expect((await update(MEMBER)).count).toBe(0)
     expect((await update(STRANGER)).count).toBe(0)
     await expect(withUserContext(MEMBER, () => prisma.cloudBillingAccount.create({ data: { ownerUserId: OWNER } }))).rejects.toThrow()
+    // The owner requests its deletion, then cancels it.
     expect((await update(OWNER)).count).toBe(1)
+    const cancel = await withUserContext(OWNER, () =>
+      prisma.cloudBillingAccount.updateMany({ where: { id: 'ba-owner' }, data: { deletionReason: null, deletionRequestedAt: null, deletionScheduledFor: null } }),
+    )
+    expect(cancel.count).toBe(1)
+  })
+
+  it('[KLEDG-R3-CLOUD-04] never lets the owner write its billing state: plan, status, trial, end of contract', async () => {
+    const write = (data: Record<string, unknown>) =>
+      withUserContext(OWNER, () => prisma.cloudBillingAccount.updateMany({ where: { id: 'ba-owner' }, data }))
+    for (const data of [
+      { planId: 'cabinet' },
+      { subscriptionStatus: 'trialing' },
+      { trialEnd: new Date('2099-01-01T00:00:00Z') },
+      { stripeSubscriptionId: 'sub_TestOwn0000001' },
+      { paymentFailedAt: null, currentPeriodEnd: new Date('2099-01-01T00:00:00Z') },
+      { extraCompanies: 0, dedicatedDatabase: true },
+    ]) {
+      await expect(write(data), JSON.stringify(data)).rejects.toThrow()
+    }
+    // The Stripe customer is set once (Checkout), never replaced.
+    expect((await write({ stripeCustomerId: 'cus_TestOwn000001' })).count).toBe(1)
+    await expect(write({ stripeCustomerId: 'cus_TestOther0001' })).rejects.toThrow()
+    // A deletion scheduled at the end of the contract is not the owner's to lift.
+    await withSystemContext('test', () =>
+      prisma.cloudBillingAccount.update({ where: { id: 'ba-stranger' }, data: { deletionReason: 'contract_ended', deletionScheduledFor: new Date('2026-12-01T00:00:00Z') } }),
+    )
+    await expect(
+      withUserContext(STRANGER, () =>
+        prisma.cloudBillingAccount.updateMany({ where: { id: 'ba-stranger' }, data: { deletionReason: null, deletionScheduledFor: null } }),
+      ),
+    ).rejects.toThrow()
+    // A new account starts bare: no plan, no status.
+    await withSystemContext('test', () => prisma.cloudBillingAccount.delete({ where: { id: 'ba-stranger' } }).then(() => undefined))
+    await expect(
+      withUserContext(STRANGER, () => prisma.cloudBillingAccount.create({ data: { ownerUserId: STRANGER, subscriptionStatus: 'active', planId: 'cabinet' } })),
+    ).rejects.toThrow()
+    await withUserContext(STRANGER, () => prisma.cloudBillingAccount.create({ data: { id: 'ba-stranger', ownerUserId: STRANGER } }))
+    const owner = await withSystemContext('test', () => prisma.cloudBillingAccount.findUniqueOrThrow({ where: { id: 'ba-owner' } }))
+    expect(owner).toMatchObject({ planId: 'holding', subscriptionStatus: 'active', trialEnd: null, stripeSubscriptionId: null })
+  })
+
+  it('[KLEDG-R3-CLOUD-04] never lets a member, nor the owner, delete or re-point an ownership row', async () => {
+    // The policies hide the row from these statements: nothing is deleted or changed.
+    for (const userId of [MEMBER, OWNER]) {
+      expect((await withUserContext(userId, () => prisma.cloudCompanyOwnership.deleteMany({ where: { companyId: 'company-owned' } }))).count).toBe(0)
+      const repointed = await withUserContext(userId, () =>
+        prisma.cloudCompanyOwnership.updateMany({ where: { companyId: 'company-owned' }, data: { billingAccountId: 'ba-stranger' } }),
+      )
+      expect(repointed.count).toBe(0)
+    }
+    const row = await withSystemContext('test', () => prisma.cloudCompanyOwnership.findUniqueOrThrow({ where: { companyId: 'company-owned' } }))
+    expect(row.billingAccountId).toBe('ba-owner')
   })
 
   it('follows the companies for ownership rows, and keeps acceptances to their user', async () => {

@@ -149,8 +149,15 @@ report, FEC and export keeps working, for every member of the company.
   Stripe by lookup key.
 - Row level security (`KLEDG_RLS=enforce`): the cloud tables have their own
   policies (billing account: its owner, and the members of the companies it
-  owns for reading; ownership rows: reachable companies; terms acceptances:
-  their user; Stripe event ids: system only). The Stripe webhook, the
+  owns for reading; ownership rows: read for reachable companies, written by
+  unrestricted contexts only; terms acceptances: their user; Stripe event
+  ids: system only). A trigger keeps the billing state of an account (plan,
+  status, trial, periods, Stripe subscription, end of contract) to Stripe's
+  webhook, the maintenance and the operator: the owner may only set its
+  Stripe customer once, request a deletion or cancel its own request
+  (migration `20261123110000_cloud_billing_guards`, KLEDG-R3-CLOUD-04). The
+  creation hook records the ownership of a new company in a `system`
+  context. The Stripe webhook, the
   maintenance and the rank of a company among its owner's companies (plan
   limit on writes, ids only) run in a `system` context
   (`instance-extension`); everything else runs in the request's user context. A company created by a user runs
