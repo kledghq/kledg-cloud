@@ -50,8 +50,10 @@ export const CLOUD_PUBLIC_PAGES: readonly string[] = [CLOUD_PATHS.signup]
 export const CLOUD_RATE_LIMITS = {
   /** Sign-up attempts, per client IP. */
   'cloud-signup-ip': { window: 3600, max: 10, message: 'Trop de créations de compte depuis cette connexion. Réessayez dans une heure.' },
-  /** Sign-up attempts, per address (whether it has an account or not). */
+  /** Sign-up attempts, per mailbox (whether it has an account or not; "+tags" and Gmail dots ignored). */
   'cloud-signup-email': { window: 3600, max: 3, message: 'Trop de demandes pour cette adresse. Réessayez dans une heure.' },
+  /** Sign-up attempts of the whole instance: each sends an email (confirmation link or "account exists"). */
+  'cloud-signup-global': { window: 3600, max: 300, message: 'Trop de créations de compte en ce moment. Réessayez dans une heure.' },
   /** Calls to Stripe (checkout, customer portal, invoices), per user. */
   'cloud-billing': { window: 60, max: 10, message: 'Trop de requêtes de facturation en une minute. Patientez une minute.' },
   /** Full data exports, per user. */

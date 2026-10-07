@@ -133,8 +133,11 @@ report, FEC and export keeps working, for every member of the company.
   sign-up endpoint stays disabled.
 - Sign-in requires a confirmed address (`REQUIRE_EMAIL_VERIFICATION`);
   unconfirmed accounts are deleted after 7 days.
-- Rate limits per client IP and per hashed address; a honeypot field;
-  sign-up stays closed until the operator account exists.
+- Rate limits per client IP (an IPv6 address counts for its /64), per
+  hashed mailbox (the address without its "+tag", Gmail without dots) and
+  for the whole instance (300 sign-ups an hour, each sends an email; an
+  error is logged when the cap is reached), KLEDG-R3-CLOUD-07; a honeypot
+  field; sign-up stays closed until the operator account exists.
 - The webhook checks the Stripe signature on the raw body (5 minute
   tolerance), reads the subscription again from Stripe instead of trusting
   the event, and records the event id in the same transaction as its effect.

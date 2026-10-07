@@ -215,6 +215,53 @@ describe.skipIf(!available)('public sign-up', () => {
     }
   })
 
+  it('[KLEDG-R3-CLOUD-07] counts one mailbox whatever its +tag or Gmail dots, and one IPv6 subscriber per /64', async () => {
+    const { addressKey, mailboxOf } = await import('@/lib/cloud/signup/signup.service')
+    expect(mailboxOf('Victim+1@Example.test')).toBe('victim@example.test')
+    expect(mailboxOf('v.i.c.t.i.m+news@googlemail.com')).toBe('victim@gmail.com')
+    expect(mailboxOf('v.ictim@example.test')).toBe('v.ictim@example.test')
+    expect(addressKey('a+1@x.fr')).toBe(addressKey('a@x.fr'))
+    expect(addressKey('Jean.Dupont@gmail.com')).toBe(addressKey('jeandupont+kledg@gmail.com'))
+
+    vi.stubEnv('RATE_LIMIT_DISABLED', '')
+    try {
+      const statuses = []
+      for (let i = 0; i < 4; i++) statuses.push((await signup(valid({ email: `boite+${i}@example.test` }), { ip: `198.51.100.${20 + i}` })).status)
+      expect(statuses).toEqual([202, 202, 202, 429])
+
+      const ipStatuses = []
+      for (let i = 0; i < 11; i++) {
+        ipStatuses.push((await signup(valid({ email: `v6-${i}@example.test` }), { ip: `2001:db8:77:1:${(i + 1).toString(16)}::1` })).status)
+      }
+      expect(ipStatuses.slice(0, 10).every((status) => status === 202)).toBe(true)
+      expect(ipStatuses[10]).toBe(429)
+    } finally {
+      await settle()
+      vi.stubEnv('RATE_LIMIT_DISABLED', 'true')
+    }
+  })
+
+  it('[KLEDG-R3-CLOUD-07] caps the sign-up emails of the whole instance per hour', async () => {
+    vi.stubEnv('RATE_LIMIT_DISABLED', '')
+    try {
+      // The hour's cap already reached by other clients.
+      const { RATE_LIMIT_RULES } = await import('@/lib/rate-limit')
+      await prisma.rateLimit.upsert({
+        where: { key: 'cloud-signup-global|all' },
+        create: { id: 'rl-global', key: 'cloud-signup-global|all', count: RATE_LIMIT_RULES['cloud-signup-global'].max, lastRequest: BigInt(Date.now()) },
+        update: { count: RATE_LIMIT_RULES['cloud-signup-global'].max, lastRequest: BigInt(Date.now()) },
+      })
+      const refused = await signup(valid({ email: 'plafond@example.test' }), { ip: '198.51.100.200' })
+      expect(refused.status).toBe(429)
+      expect(await refused.json()).toEqual({ error: 'Trop de créations de compte en ce moment. Réessayez dans une heure.' })
+      await settle()
+      expect(state.emails).toEqual([])
+    } finally {
+      await prisma.rateLimit.deleteMany({ where: { key: 'cloud-signup-global|all' } })
+      vi.stubEnv('RATE_LIMIT_DISABLED', 'true')
+    }
+  })
+
   it('does not exist outside cloud mode', async () => {
     vi.stubEnv('KLEDG_CLOUD_MODE', '')
     expect((await signup(valid({ email: 'hors-cloud@example.test' }))).status).toBe(404)

@@ -11,9 +11,11 @@
  * - No use before the address is confirmed: Better Auth refuses to sign in
  *   an unconfirmed account (REQUIRE_EMAIL_VERIFICATION in cloud mode), and
  *   unconfirmed accounts are deleted after a few days (maintenance job).
- * - Rate limits per client IP and per address (hashed: the rate limit table
- *   never stores an address), checked before anything else, the same way
- *   for known and unknown addresses.
+ * - Rate limits per client IP (an IPv6 address by its /64), per mailbox
+ *   (the address without a "+tag", Gmail without dots; hashed: the rate
+ *   limit table never stores an address) and for the whole instance (every
+ *   accepted request sends an email), checked before anything else, the
+ *   same way for known and unknown addresses (KLEDG-R3-CLOUD-07).
  * - A honeypot field: a form filled by a bot gets the usual answer and
  *   creates nothing.
  * - The CGV must be accepted, in the version currently published (1.0,
@@ -67,10 +69,36 @@ export const SignupSchema = z.object({
 })
 export type SignupInput = z.infer<typeof SignupSchema>
 
-/** Rate limit subject of an address: a hash, so the counters table holds no address. */
-export function addressKey(email: string): string {
-  return createHash('sha256').update(`kledg-cloud-signup:${email}`).digest('hex').slice(0, 32)
+/** Domains that ignore dots in the local part (one Gmail mailbox, many spellings). */
+const DOTLESS_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
+
+/**
+ * The mailbox an address delivers to, for rate limits (KLEDG-R3-CLOUD-07):
+ * lowercased, without a "+tag" (plus addressing, offered by most
+ * providers), and for Gmail without dots and with googlemail.com as
+ * gmail.com. `victim+1@`, `victim+2@`... are one mailbox, one limit.
+ */
+export function mailboxOf(email: string): string {
+  const address = email.trim().toLowerCase()
+  const at = address.lastIndexOf('@')
+  if (at <= 0) return address
+  let local = address.slice(0, at)
+  let domain = address.slice(at + 1)
+  local = local.split('+')[0] || local
+  if (DOTLESS_DOMAINS.has(domain)) {
+    local = local.replace(/\./g, '')
+    domain = 'gmail.com'
+  }
+  return `${local}@${domain}`
 }
+
+/** Rate limit subject of an address: a hash of its mailbox, so the counters table holds no address. */
+export function addressKey(email: string): string {
+  return createHash('sha256').update(`kledg-cloud-signup:${mailboxOf(email)}`).digest('hex').slice(0, 32)
+}
+
+/** Subject of the instance-wide cap on sign-up emails (cloud-signup-global). */
+const ALL_SIGNUPS = 'all'
 
 /**
  * Checks the request and schedules the sign-up after the response. Throws
@@ -80,6 +108,11 @@ export function addressKey(email: string): string {
 export async function requestSignup(input: SignupInput, clientIp: string, now: Date = new Date()): Promise<void> {
   await enforceRateLimit('cloud-signup-ip', clientIp)
   await enforceRateLimit('cloud-signup-email', addressKey(input.email))
+  // Every accepted request sends one email: a cap for the whole instance protects the sending domain.
+  await enforceRateLimit('cloud-signup-global', ALL_SIGNUPS).catch((error: unknown) => {
+    logger.error('Sign-up cap of the instance reached: sign-ups refused for the hour (check for abuse)')
+    throw error
+  })
   if (input.termsVersion !== currentTermsVersion()) {
     throw new ConflictError('Les conditions générales ont changé entre-temps. Rechargez la page pour lire la nouvelle version.')
   }
