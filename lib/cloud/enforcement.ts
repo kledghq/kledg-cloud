@@ -32,6 +32,7 @@ import {
   billingAccountOfCompany,
   countedCompanies,
   findBillingAccount,
+  ownedCompanyIds,
   recordCompanyOwnership,
   virtualBillingAccount,
 } from './billing/billing-account.service'
@@ -93,4 +94,40 @@ export async function cloudCompanyWriteRefusal(companyId: string, now: Date = ne
     if (rank >= access.companyLimit) return { message: companyOverLimitMessage(access), link: UPGRADE_LINK }
   }
   return null
+}
+
+/**
+ * The companies whose SIREN and establishment SIRETs a company must not
+ * repeat (companyIdentifierScope of the instance policy, KLEDG-R3-CLOUD-01):
+ * those of the billing account owning `companyId`, or of the account of
+ * `actor` for a creation. The operator's companies (no ownership row) form
+ * their own scope. A customer can then neither take the SIREN of a business
+ * that is not a customer yet, nor learn which businesses are.
+ *
+ * Read in a system context: a member of one company of an account does not
+ * reach its other companies, and the scope must be the same for every
+ * member. Only ids leave this function, and they only feed the boolean of
+ * kledg_company_identifier_taken.
+ */
+export async function cloudCompanyIdentifierScope(
+  companyId: string | null,
+  actor: Pick<InstanceActor, 'id' | 'role'> | null,
+): Promise<string[]> {
+  return withSystemContext('instance-extension', async () => {
+    let billingAccountId: string | null = null
+    if (companyId) {
+      const ownership = await prisma.cloudCompanyOwnership.findUnique({ where: { companyId }, select: { billingAccountId: true } })
+      billingAccountId = ownership?.billingAccountId ?? null
+    } else if (actor && actor.role !== 'admin') {
+      // A customer without an account owns nothing yet (and may not create a company anyway).
+      const account = await prisma.cloudBillingAccount.findUnique({ where: { ownerUserId: actor.id }, select: { id: true } })
+      if (!account) return []
+      billingAccountId = account.id
+    }
+    if (billingAccountId) return ownedCompanyIds(billingAccountId)
+    const operatorCompanies = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT c."id" FROM "companies" c
+      WHERE NOT EXISTS (SELECT 1 FROM "cloud_company_ownerships" o WHERE o."companyId" = c."id")`
+    return operatorCompanies.map((row) => row.id)
+  })
 }

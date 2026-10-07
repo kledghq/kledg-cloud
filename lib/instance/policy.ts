@@ -83,15 +83,16 @@ export async function companyWriteRefusal(companyId: string): Promise<ActionRefu
  * (lib/companies/identifiers.ts). A service whose customers share one
  * database narrows it to the customer's own companies, so that no customer
  * blocks or learns another's identifiers. Kledg: null, one organisation per
- * instance.
+ * instance. Cloud: the companies of the same billing account (the
+ * operator's companies among themselves), KLEDG-R3-CLOUD-01.
  */
 export async function companyIdentifierScope(
   companyId: string | null,
   actor: Pick<InstanceActor, 'id' | 'role'> | null,
 ): Promise<string[] | null> {
-  void companyId
-  void actor
-  return null
+  if (!isCloudMode()) return null
+  const { cloudCompanyIdentifierScope } = await import('@/lib/cloud/enforcement')
+  return cloudCompanyIdentifierScope(companyId, actor)
 }
 
 /**
@@ -99,10 +100,11 @@ export async function companyIdentifierScope(
  * random suffix, generated ones and those chosen by users alike. Slugs stay
  * unique across the instance; with the suffix, an answer never depends on
  * the slugs of companies the user cannot see. Kledg: false, slugs are
- * derived from the name and numbered on collision.
+ * derived from the name and numbered on collision. Cloud: yes, customers
+ * share the instance (KLEDG-R3-CLOUD-01).
  */
 export function randomCompanySlugSuffix(): boolean {
-  return false
+  return isCloudMode()
 }
 
 /**

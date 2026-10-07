@@ -148,6 +148,16 @@ report, FEC and export keeps working, for every member of the company.
   limit on writes, ids only) run in a `system` context
   (`instance-extension`); everything else runs in the request's user context. A company created by a user runs
   as `system` (`company-creation`) until its membership exists.
+- Company identifiers (KLEDG-R3-CLOUD-01): a SIREN and an establishment
+  SIRET are unique within the companies of one billing account (the
+  operator's companies among themselves), not across the shared database
+  (`companyIdentifierScope`, `lib/cloud/enforcement.ts`; migration
+  `20261123100000_cloud_identifier_scope` drops the instance-wide unique
+  indexes). A trial cannot take the SIREN of a business that is not a
+  customer yet, and no answer tells whether another customer uses a SIREN.
+  Slugs stay unique across the instance (URLs) and always get a random
+  suffix of six letters and digits, so neither a creation nor a slug change
+  reveals another customer's company names.
 
 ## Environment variables
 

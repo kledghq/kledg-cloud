@@ -155,7 +155,7 @@ model Company {
   id                         String            @id @default(cuid())
   name                       String
   slug                       String            @unique // Identifiant lisible dans les URL (/atelier-lumen/...), modifiable
-  siren                      String            @unique // SIREN (9 chiffres) - identifie l'entreprise
+  siren                      String // SIREN (9 chiffres) - identifie l'entreprise (kledg-cloud: unique per customer, companyIdentifierScope)
   addressId                  String? // Référence vers l'adresse réutilisable
   phone                      String?
   email                      String?
@@ -303,7 +303,7 @@ model Company {
 model Establishment {
   id                                String    @id @default(cuid())
   companyId                         String
-  siret                             String    @unique // SIRET de l'établissement (14 chiffres)
+  siret                             String // SIRET de l'établissement (14 chiffres) (kledg-cloud: unique per customer, companyIdentifierScope)
   siren                             String? // SIREN (9 chiffres, extrait du SIRET)
   name                              String? // Nom de l'établissement (ex: "Siège social", "Agence Paris", etc.)
   addressId                         String? // Référence vers l'adresse de l'établissement
