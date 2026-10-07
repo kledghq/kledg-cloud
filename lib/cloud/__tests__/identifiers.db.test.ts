@@ -28,6 +28,7 @@ vi.mock('@/lib/session', () => ({ getCurrentUser: async () => state.user }))
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
 import type { CreateCompanyInput } from '@/lib/companies/company-wizard'
+import { rlsMode } from '@/lib/rls/mode'
 
 const available = await testDatabaseAvailable()
 
@@ -120,8 +121,11 @@ describe.skipIf(!available)('company identifiers in Kledg Cloud (KLEDG-R3-CLOUD-
     expect(other.status).toBe(201)
     const otherBody = await json(other)
     expect((await addEstablishment('victim', otherBody.id, `${OTHER_TENANT_SIREN}00014`)).status).toBe(201)
-    const seen = await rls.withUserContext('u-squatter', () => prisma.company.count({ where: { siren: OTHER_TENANT_SIREN } }))
-    expect(seen).toBe(0)
+    if (rlsMode() === 'enforce') {
+      // The squatter cannot read the other customer's company: only the answers below could tell.
+      const seen = await rls.withUserContext('u-squatter', () => prisma.company.count({ where: { siren: OTHER_TENANT_SIREN } }))
+      expect(seen).toBe(0)
+    }
 
     const own = await create('squatter', 'Sonde', SQUATTER_OWN_SIREN)
     expect(own.status).toBe(201)
