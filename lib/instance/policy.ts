@@ -112,10 +112,11 @@ export function randomCompanySlugSuffix(): boolean {
  * docs/rls.md). When true and the policies are off, the server refuses to
  * start (instrumentation.ts) and the database client refuses to open
  * (lib/prisma.ts), so no request is served without them. Kledg: false.
+ * Cloud: yes, customers share one database (KLEDG-CLOUD-007), except under
+ * the test runner, whose suite also runs with KLEDG_RLS=off.
  */
 export function requiresRowLevelSecurity(env: Record<string, string | undefined> = process.env): boolean {
-  void env
-  return false
+  return isCloudMode(env) && env.NODE_ENV !== 'test'
 }
 
 /**

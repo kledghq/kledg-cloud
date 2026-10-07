@@ -167,7 +167,7 @@ Kledg's own variables ([configuration.md](configuration.md)), plus
 | Variable | Value |
 |---|---|
 | `KLEDG_CLOUD_MODE` | `true` |
-| `KLEDG_RLS` | `enforce`, with `KLEDG_DATABASE_URL` (application role) and `DATABASE_MIGRATION_URL` (owner), see [rls.md](rls.md) |
+| `KLEDG_RLS` | `enforce`, with `KLEDG_DATABASE_URL` (application role) and `DATABASE_MIGRATION_URL` (owner), see [rls.md](rls.md). Required: in cloud mode the server refuses to start and to open the database without it (`requiresRowLevelSecurity`, KLEDG-CLOUD-007) |
 | `STRIPE_SECRET_KEY` | secret or restricted key of the Stripe account |
 | `STRIPE_WEBHOOK_SECRET` | signing secret of the webhook endpoint |
 | `BETTER_AUTH_URL` | `https://app.kledg.com` |

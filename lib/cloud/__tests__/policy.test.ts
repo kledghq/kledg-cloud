@@ -6,6 +6,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { INSTANCE_ACTIONS } from '@/lib/instance/types'
+import { requiresRowLevelSecurity } from '@/lib/instance/policy'
+import { assertRequiredRlsMode } from '@/lib/rls/mode'
 import { CLOUD_PUBLIC_PAGES, CLOUD_RATE_LIMITS, CLOUD_REFUSED, CLOUD_SELF_AUTHENTICATED_API_ROUTES, cloudIsActionAllowed, cloudRefusalMessage, DEFAULT_REFUSAL } from '../policy'
 
 const user = { id: 'u1', email: 'user@test.local', role: 'user' }
@@ -55,5 +57,17 @@ describe('Kledg Cloud policy', () => {
     expect(await kledg.companyCreationRefusal(user)).toEqual({ message: "La création de sociétés est réservée aux administrateurs de l'instance." })
     expect(await kledg.companyWriteRefusal('c1')).toBeNull()
     await expect(kledg.afterCompanyCreated('c1', user)).resolves.toBeUndefined()
+  })
+
+  it('[KLEDG-CLOUD-007] refuses to serve in cloud mode without KLEDG_RLS=enforce, with the variable to set', () => {
+    const cloud = { KLEDG_CLOUD_MODE: 'true', NODE_ENV: 'production' }
+    expect(requiresRowLevelSecurity(cloud)).toBe(true)
+    expect(() => assertRequiredRlsMode(requiresRowLevelSecurity(cloud), cloud)).toThrow(/set KLEDG_RLS=enforce/)
+    expect(() => assertRequiredRlsMode(requiresRowLevelSecurity({ ...cloud, KLEDG_RLS: 'off' }), { ...cloud, KLEDG_RLS: 'off' })).toThrow(
+      /requires row level security/,
+    )
+    expect(() => assertRequiredRlsMode(requiresRowLevelSecurity(cloud), { ...cloud, KLEDG_RLS: 'enforce' })).not.toThrow()
+    // Plain Kledg never requires it.
+    expect(requiresRowLevelSecurity({ NODE_ENV: 'production' })).toBe(false)
   })
 })
