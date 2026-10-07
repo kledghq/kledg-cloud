@@ -40,7 +40,12 @@ export function anonymizeAppUrl(url: string): string {
   return `${parsed.origin}/${anonymized.join('/')}`
 }
 
-/** Vercel Web Analytics on app.kledg.com: cookieless page views, anonymized paths. */
+/**
+ * Vercel Web Analytics on app.kledg.com: cookieless page views, anonymized
+ * paths. The referrer the script reports cannot be rewritten here: every
+ * response carries Referrer-Policy: strict-origin (lib/security-headers.ts),
+ * so it is the origin only, never a company page (KLEDG-R3-CLOUD-03).
+ */
 export function CloudAnalytics() {
   return <Analytics beforeSend={(event: BeforeSendEvent) => ({ ...event, url: anonymizeAppUrl(event.url) })} />
 }
