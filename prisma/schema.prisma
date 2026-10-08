@@ -293,6 +293,7 @@ model Company {
   revenueAccountSettings     RevenueAccountSetting[]
   trainingReports            TrainingReport[]
   payrollTaxYears            PayrollTaxYear[]
+  invitations                CompanyInvitation[]
 
   @@index([addressId])
   @@index([headquartersAddressId])
@@ -662,7 +663,7 @@ model BankTransaction {
   date                  DateTime
   label                 String?
   reference             String?
-  side                  String // debit, credit
+  side                  String // "debit" or "credit" only (check constraint bank_transactions_side_check, lib/banking/side.ts)
   note                  String?
   imported              Boolean   @default(false)
   reconciled            Boolean   @default(false) // Indique si la transaction est rapprochée
@@ -1661,6 +1662,8 @@ model UpdateConnection {
   isFork         Boolean   @default(false)
   defaultBranch  String    @default("main")
   connectedById  String?
+  // The token listed another private repository at connection (null: not checked)
+  tokenReachesOtherRepos Boolean?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1788,6 +1791,8 @@ model McpPendingAction {
   argsHash   String
   /// The dry run shown to the user before they decide.
   preview    Json
+  /// SHA-256 of the state the user approved (dry run and target rows), checked again at execution.
+  fingerprint String?
   /// pending, approved, rejected, executing, executed, failed
   status     String    @default("pending")
   expiresAt  DateTime
@@ -2191,6 +2196,8 @@ model ExpenseReport {
   submittedById  String?
   validatedAt    DateTime?
   validatedById  String?
+  /// Validated by its own author, the company's only member with the validation right (lib/expense-reports/self-validation.ts).
+  selfValidated  Boolean             @default(false)
   /// Why a validator sent the report back to its author.
   returnNote     String?
   /// Draft entry created by posting (null: not posted). Deleting that draft brings the report back to validée.
@@ -3037,6 +3044,10 @@ model VatDeductionYear {
   /// VAT borne in the year on goods and services subject to the coefficient,
   /// entered when the books cannot give it; null: derived from 44562 and 44566.
   incurredVat              Decimal? @db.Decimal(15, 2)
+  /// First day the coefficient applied to the year's postings changed after
+  /// VAT was deducted in the year: the VAT borne must then be entered
+  /// (lib/vat-deduction/load-vat-deduction.service.ts). Null: unchanged.
+  coefficientChangedOn     DateTime? @db.Date
   note                     String?
   createdById              String?
   createdAt                DateTime @default(now())
@@ -3112,4 +3123,34 @@ model PayrollTaxYear {
   @@unique([companyId, year])
   @@index([companyId])
   @@map("payroll_tax_years")
+}
+
+/// Invitation of a person to a company by its administrators (GitHub issue
+/// #13, lib/rbac/company-invitations.service.ts, docs/membres-et-invitations.md).
+/// The emailed link carries a random token; only its SHA-256 is stored. An
+/// invitation is open while it is neither accepted nor revoked and not
+/// expired; accepting it is single use (acceptedAt set once).
+model CompanyInvitation {
+  id           String    @id @default(cuid())
+  companyId    String
+  /// Lowercased address the link was sent to; only that account can accept.
+  email        String
+  /// companyAdmin, accountant or viewer (never the instance administrator role).
+  role         String
+  tokenHash    String    @unique
+  invitedById  String?
+  expiresAt    DateTime
+  lastSentAt   DateTime  @default(now())
+  sendCount    Int       @default(1)
+  acceptedAt   DateTime?
+  acceptedById String?
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([companyId, email])
+  @@map("company_invitations")
 }

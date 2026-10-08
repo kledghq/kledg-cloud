@@ -20,6 +20,14 @@
  *      preview without writing, for an assistant that wants to show it;
  *    When only some actions of a tool are high impact (`highImpactActions`),
  *    the others run at once, like a direct tool;
+ *    In validation mode the approval is bound to the data, not only to the
+ *    arguments: a fingerprint of the dry run and of the rows the tool
+ *    targets (`targetState`) is stored with the pending action and computed
+ *    again before the execution, then each target is checked again by the
+ *    service inside its transaction, under a lock of its rows
+ *    (lib/approved-state/guard.ts); when the data changed since the
+ *    approval the action is refused and nothing is written
+ *    (fingerprint.ts);
  * 4. every action (not the dry runs nor the plain reads) is written to the
  *    audit log with the user, the assistant (OAuth client name or API key
  *    name), the execution mode, the tool and the main ids.
@@ -39,10 +47,15 @@ import type { Permission } from '@/lib/rbac/authorize'
 import { FULL_CONTROL_REQUIRED_MESSAGE, type CompanyGuard, type McpAccess } from '@/lib/mcp/company-access'
 import { json, run, type ToolResult } from '@/lib/mcp/tool-result'
 import { READ_ONLY, describeTool, permissionsOfAction, writeAnnotations, type ActionPermissions } from '@/lib/mcp/tool-meta'
-import { ForbiddenError } from '@/lib/accounting/errors'
+import { ConflictError, ForbiddenError } from '@/lib/accounting/errors'
 import type { GroupAccess } from '@/lib/management-fees/access'
 import type { ExecutionMode } from '@/lib/ai-access/access'
-import { claimApprovedAction, createPendingAction, finishAction } from './pending-actions'
+import { claimApprovedAction, createPendingAction, finishAction, releaseAction } from './pending-actions'
+import { STATE_CHANGED_MESSAGE, readTargets, stateFingerprint } from './fingerprint'
+import { isGenericTarget, type TargetRef } from '@/lib/approved-state/targets'
+import { ApprovedStateChangedError, checkApprovedTargets, runWithApprovedState } from '@/lib/approved-state/guard'
+import { runInAmbientTransaction } from '@/lib/approved-state/ambient'
+import { logger } from '@/lib/logger'
 import { TWO_STEP, stepFor } from './descriptions'
 
 export const companyIdInput = z.string().describe('Company id, from list_companies.')
@@ -111,6 +124,21 @@ export interface ConfirmedTool<S extends Shape, P, R> extends ToolBase<S, R> {
    * direct tool. Every action is high impact when absent.
    */
   highImpactActions?: readonly string[]
+  /**
+   * Tools whose calls are high impact only with some arguments (a rule
+   * marked autoCreate, applied without a click): whether this call is. The
+   * other calls run at once, like a direct tool. Replaces highImpactActions.
+   */
+  highImpactWhen?: (args: Args<S>) => boolean
+  /**
+   * The rows the action acts on (entries with their lines, an invoice with
+   * its lines, rules...): in validation mode the approval is refused when
+   * they, or the dry run, changed since the user approved it, checked before
+   * the execution and again by the service inside its transaction under a
+   * lock of the rows (fingerprint.ts, lib/approved-state/guard.ts). The dry
+   * run alone is compared, before the execution only, when absent.
+   */
+  targetState?: (args: Args<S>, ctx: FullControlContext) => TargetRef[]
 }
 
 export type FullControlTool<S extends Shape, P, R> = DirectTool<S, R> | ConfirmedTool<S, P, R>
@@ -186,10 +214,10 @@ async function limitFullControl(userId: string) {
 }
 
 const APPROVAL_NEXT_STEP =
-  "Aperçu seulement : rien n'a été modifié. Montrez cet aperçu à l'utilisateur et donnez-lui le lien approvalUrl : il doit approuver l'action lui-même dans Kledg (vous ne pouvez pas l'approuver). Une fois approuvée, rappelez l'outil avec les mêmes arguments et actionId."
+  "Aperçu seulement\u00a0: rien n'a été modifié. Montrez cet aperçu à l'utilisateur et donnez-lui le lien approvalUrl\u00a0: il doit approuver l'action lui-même dans Kledg (vous ne pouvez pas l'approuver). Une fois approuvée, rappelez l'outil avec les mêmes arguments et actionId."
 
 const AUTOMATIC_NEXT_STEP =
-  "Aperçu seulement : rien n'a été modifié. Pour exécuter l'action, rappelez l'outil avec les mêmes arguments, sans dryRun."
+  "Aperçu seulement\u00a0: rien n'a été modifié. Pour exécuter l'action, rappelez l'outil avec les mêmes arguments, sans dryRun."
 
 export function registerFullControlTool<S extends Shape, P, R>(
   server: McpServer,
@@ -249,7 +277,9 @@ export function registerFullControlTool<S extends Shape, P, R>(
             companyIds: () => guard.companyIds(),
           },
         }
-        const highImpact = tool.confirmation && (!tool.highImpactActions || tool.highImpactActions.includes(String(action)))
+        const highImpact =
+          tool.confirmation &&
+          (tool.highImpactWhen ? tool.highImpactWhen(args) : !tool.highImpactActions || tool.highImpactActions.includes(String(action)))
 
         // A dry run asked in automatic mode only previews, whatever the action.
         if (tool.confirmation && automatic && dryRun) {
@@ -258,6 +288,7 @@ export function registerFullControlTool<S extends Shape, P, R>(
 
         if (tool.confirmation && highImpact) {
           const audited = tool.audit
+          const targetState = tool.targetState
           return highImpactCall<P, R>({
             access,
             tool: tool.name,
@@ -265,6 +296,7 @@ export function registerFullControlTool<S extends Shape, P, R>(
             args,
             actionId,
             preview: () => tool.preview(args, ctx),
+            targetState: targetState && (() => targetState(args, ctx)),
             execute: () => tool.execute(args, ctx),
             audit: audited && ((result: R) => audited(args, result)),
           })
@@ -287,6 +319,14 @@ interface HighImpactCall<P, R> {
   args: unknown
   actionId?: string
   preview: () => Promise<P>
+  /** The rows the action acts on, part of the fingerprint the approval is bound to. */
+  targetState?: () => TargetRef[]
+  /**
+   * false: the service checks the generic targets itself, in its own
+   * transaction (create_company, whose rows are written as the system).
+   * Otherwise generic targets make the execution one transaction (ambient.ts).
+   */
+  atomic?: boolean
   execute: () => Promise<R>
   /** Main ids written to the audit log with the action. */
   audit: ((result: R) => Record<string, unknown>) | null
@@ -312,10 +352,11 @@ async function highImpactCall<P, R>(call: HighImpactCall<P, R>): Promise<ToolRes
   }
 
   const binding = { userId: access.user.id, caller: access.caller, tool, companyId, args: call.args }
+  const targetsNow = () => readTargets(call.targetState ? call.targetState() : [])
   if (!call.actionId) {
     const preview = await call.preview()
     const assistant = await assistantOf(access)
-    const pending = await createPendingAction(binding, preview, assistant.name)
+    const pending = await createPendingAction(binding, preview, assistant.name, stateFingerprint(preview, await targetsNow()))
     await audit(tool, access, companyId, { actionId: pending.id }, undefined, 'MCP_FULL_CONTROL_PENDING')
     return json({
       dryRun: true,
@@ -327,18 +368,48 @@ async function highImpactCall<P, R>(call: HighImpactCall<P, R>): Promise<ToolRes
     })
   }
   const actionId = call.actionId
+  let approvedFingerprint: string | null
   try {
-    await claimApprovedAction(actionId, binding)
+    approvedFingerprint = (await claimApprovedAction(actionId, binding)).fingerprint
   } catch (error) {
     // Unapproved, refused, replayed, expired or tampered actions leave a trace before the refusal.
     await audit(tool, access, companyId, { actionId }, error instanceof Error ? error.message : 'refused')
     throw error
   }
+  // The approval covers the data the user saw: the action is claimed (it
+  // cannot run twice), then refused if the dry run or the target rows
+  // changed since (an approved draft edited by a direct tool, say). A
+  // refusal releases the claim: the approval stays unused, and executes
+  // only on the data the user approved.
+  let targets: Awaited<ReturnType<typeof targetsNow>>
+  try {
+    targets = await targetsNow()
+    const current = stateFingerprint(await call.preview(), targets)
+    if (approvedFingerprint === null || current !== approvedFingerprint) throw new ConflictError(STATE_CHANGED_MESSAGE)
+  } catch (error) {
+    await releaseAction(actionId)
+    await audit(tool, access, companyId, { actionId }, error instanceof Error ? error.message : 'refused')
+    throw error
+  }
+  // The services check each target again inside their own transaction,
+  // under a lock of its rows (lib/approved-state/guard.ts): an edit landing
+  // after the check above rolls the service's transaction back.
+  // Tools whose targets are generic rows (lib/approved-state/targets.ts) run in one transaction that starts by
+  // locking and checking them (ambient.ts); the others check their targets in their services' own transactions.
+  const atomic = call.atomic !== false && targets.some(({ ref }) => isGenericTarget(ref))
+  const execute = atomic ? () => runInAmbientTransaction(prisma, checkApprovedTargets, call.execute) : call.execute
   let result: R
   try {
-    result = await call.execute()
+    const run = await runWithApprovedState(targets, execute)
+    result = run.result
+    if (run.unchecked.length > 0) logger.warn('MCP approved action: targets not checked inside a transaction', { tool, actionId, unchecked: run.unchecked })
   } catch (error) {
-    await finishAction(actionId, false)
+    if (error instanceof ApprovedStateChangedError) {
+      await releaseAction(actionId)
+      await audit(tool, access, companyId, { actionId }, error.message)
+    } else {
+      await finishAction(actionId, false)
+    }
     throw error
   }
   await finishAction(actionId, true)
@@ -428,6 +499,9 @@ export function registerInstanceTool<S extends Shape, P, R>(
           args,
           actionId,
           preview: () => tool.preview(args, access),
+          // The user creating the company, locked inside the creation transaction (createCompanyRows)
+          targetState: () => [{ kind: 'lock', table: 'user', companyId: null, id: access.user.id }],
+          atomic: false,
           execute: () => tool.execute(args, access),
           audit: (result) => tool.audit(args, result).ids,
           auditCompany: (result) => tool.audit(args, result).companyId,
