@@ -10,6 +10,9 @@
  *   accounts, journals, entries and their lines, bank accounts and
  *   transactions, fixed assets, tiers, invoices, assignment rules,
  *   attachments metadata, tax regimes);
+ * - justificatifs/: the receipt files Kledg keeps for the company, wherever
+ *   they are stored, checked against their SHA-256, with a manifest mapping
+ *   each file to its bank transaction or expense line (receipt-files.ts);
  * - LISEZMOI.txt: what each file holds.
  *
  * Always available, read-only accounts included (GET, never refused by the
@@ -22,6 +25,7 @@ import { prisma } from '@/lib/prisma'
 import { exportFec } from '@/lib/fec/export'
 import { writeAuditLog } from '@/lib/audit'
 import { currentRlsContext, runWithRlsContext } from '@/lib/rls/context'
+import { planReceiptExport, receiptFileEntries, RECEIPTS_FOLDER, type ReceiptExportOptions, type ReceiptExportPlan } from './receipt-files'
 import { zipReadableStream, type ZipEntry } from './zip'
 
 const PAGE = 2000
@@ -109,7 +113,34 @@ const TABLES: Array<[string, TableLoader]> = [
   ['pieces-justificatives', (companyId) => allPages((cursor) => prisma.attachment.findMany({ where: { companyId }, ...paged(cursor) }))],
 ]
 
-const README = (companyName: string, exportedAt: Date) => `Export complet des données de ${companyName}
+const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1).replace('.', ',')}\u00a0Go`
+
+function receiptsReadme(plan: ReceiptExportPlan): string {
+  if (plan.files === 0) return ''
+  const common = `  manifeste.csv (et manifeste.json) relie chaque fichier à ce qu'il justifie :
+  transaction bancaire (date, libellé, montant), ligne de note de frais
+  (numéro de la note, date, montant TTC) ou justificatif en attente, avec
+  l'empreinte SHA-256 et le statut de chaque fichier.`
+  if (plan.embedded) {
+    return `
+${RECEIPTS_FOLDER}/
+  Les justificatifs conservés par Kledg (photos, PDF), nommés
+  <date>_<nom> : la date de la transaction ou de la dépense justifiée.
+  Chaque fichier est vérifié par son empreinte SHA-256 avant d'être ajouté ;
+  un fichier introuvable ou altéré n'est pas ajouté et le manifeste l'indique.
+${common}
+`
+  }
+  return `
+${RECEIPTS_FOLDER}/
+  Vos ${plan.files} justificatifs représentent ${gib(plan.bytes)}, au-delà de ce qu'un
+  export en ligne peut contenir : ils ne sont pas dans cette archive et
+  vous sont remis sur demande : contactez le support de Kledg Cloud.
+${common}
+`
+}
+
+const README = (companyName: string, exportedAt: Date, receipts: ReceiptExportPlan) => `Export complet des données de ${companyName}
 Généré le ${exportedAt.toISOString()} par Kledg Cloud.
 
 fec/
@@ -126,12 +157,13 @@ donnees/
   Les montants sont des chaînes décimales, les dates au format ISO 8601.
   Les identifiants de connexion bancaire et autres secrets ne sont jamais
   exportés.
-`
+${receiptsReadme(receipts)}`
 
 /** The entries of the archive of one company, built one after the other. */
-export async function* companyExportEntries(companyId: string, now: Date = new Date()): AsyncGenerator<ZipEntry> {
+export async function* companyExportEntries(companyId: string, now: Date = new Date(), receipts: ReceiptExportOptions = {}): AsyncGenerator<ZipEntry> {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true } })
-  yield { name: 'LISEZMOI.txt', data: README(company.name, now) }
+  const plan = await planReceiptExport(companyId, receipts.maxBytes)
+  yield { name: 'LISEZMOI.txt', data: README(company.name, now, plan) }
 
   const fiscalYears = await prisma.fiscalYear.findMany({ where: { companyId }, orderBy: { startDate: 'asc' }, select: { id: true } })
   for (const fiscalYear of fiscalYears) {
@@ -142,6 +174,8 @@ export async function* companyExportEntries(companyId: string, now: Date = new D
   for (const [name, load] of TABLES) {
     yield { name: `donnees/${name}.json`, data: exportJson(await load(companyId)) }
   }
+
+  yield* receiptFileEntries(companyId, plan, receipts)
 }
 
 /** File name of the archive: kledg-export-<slug>-<yyyy-mm-dd>.zip. */

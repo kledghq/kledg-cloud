@@ -1,5 +1,5 @@
 /**
- * Minimal ZIP writer (PKWARE APPNOTE 6.3.x: local headers, deflate, central
+ * Minimal ZIP writer (PKWARE APPNOTE 6.3.x: local headers, deflate or stored, central
  * directory), for the full data export. Entries are produced one after the
  * other, so the archive streams: only one entry is in memory at a time,
  * which keeps large books under the serverless memory and response limits.
@@ -31,6 +31,11 @@ export interface ZipEntry {
   /** Path inside the archive, with forward slashes. */
   name: string
   data: Uint8Array | string
+  /**
+   * Stored as is, without deflate: for files that are already compressed
+   * (photos, PDFs), where deflate only spends time.
+   */
+  store?: boolean
 }
 
 const LIMIT = 0xffffffff
@@ -64,15 +69,18 @@ export async function* zipStream(entries: AsyncIterable<ZipEntry> | Iterable<Zip
   for await (const entry of entries) {
     const name = encoder.encode(safeName(entry.name))
     const raw = typeof entry.data === 'string' ? encoder.encode(entry.data) : entry.data
-    const compressed = new Uint8Array(deflateRawSync(raw))
+    const method = entry.store ? 0 : 8
+    const compressed = entry.store ? raw : new Uint8Array(deflateRawSync(raw))
+    // Version needed to extract: 1.0 for a stored entry, 2.0 for deflate.
+    const version = entry.store ? 10 : 20
     if (raw.length >= LIMIT || compressed.length >= LIMIT || offset >= LIMIT) throw new Error('ZIP entry too large (no ZIP64)')
     const crc = crc32(raw)
 
     const local = new DataView(new ArrayBuffer(30))
     local.setUint32(0, 0x04034b50, true)
-    local.setUint16(4, 20, true) // version needed: 2.0 (deflate)
+    local.setUint16(4, version, true)
     local.setUint16(6, 0x0800, true) // UTF-8 names
-    local.setUint16(8, 8, true) // deflate
+    local.setUint16(8, method, true) // 0 stored, 8 deflate
     local.setUint16(10, time, true)
     local.setUint16(12, day, true)
     local.setUint32(14, crc, true)
@@ -84,9 +92,9 @@ export async function* zipStream(entries: AsyncIterable<ZipEntry> | Iterable<Zip
     const header = new DataView(new ArrayBuffer(46))
     header.setUint32(0, 0x02014b50, true)
     header.setUint16(4, 20, true)
-    header.setUint16(6, 20, true)
+    header.setUint16(6, version, true)
     header.setUint16(8, 0x0800, true)
-    header.setUint16(10, 8, true)
+    header.setUint16(10, method, true)
     header.setUint16(12, time, true)
     header.setUint16(14, day, true)
     header.setUint32(16, crc, true)

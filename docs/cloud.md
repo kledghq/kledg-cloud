@@ -113,7 +113,7 @@ job.
 | Read-only 14 days after a failed payment, full access once paid (art. 9) | `past_due` and `unpaid`: grace from the first failed payment (`paymentFailedAt`), then read-only; cleared when Stripe reports the subscription active |
 | Annual renewal reminder by email at least a month ahead (art. 12) | daily maintenance, 35 days ahead (`KLEDG_CLOUD_RENEWAL_NOTICE_DAYS`, never below 31), once per period (`renewalReminderFor`) |
 | Cancellation at any time, effective at period end (art. 12) | Customer Portal (default configuration) |
-| Export at any time, free: FEC per fiscal year, structured data (art. 13) | Données et compte page: one ZIP per company; also in read-only and during the retrieval period |
+| Export at any time, free: FEC per fiscal year, structured data, receipt files (art. 13) | Données et compte page: one ZIP per company; also in read-only and during the retrieval period |
 | After the contract ends: 30 days of read-only retrieval, an email with the end date, then deletion within 30 days (art. 14) | `canceled` and `incomplete_expired` (trial ended without a card included): read-only at once. The maintenance sends the notice with the retrieval end date and schedules the deletion for that date (at least 7 days after a late notice); subscribing again before it cancels the deletion |
 | Kledg keeps only what the law requires of it (art. 14) | the account, its companies and their books are deleted; Kledg's own invoices stay in Stripe. Exception: the stored objects of the receipt files are kept (see [Data, GDPR and retention](#data-gdpr-and-retention)) |
 | Account deletion on request, cancellable for 30 days, read-only meanwhile (art. 15) | Données et compte page: address, password and, when books exist, an acknowledgement that they will be deleted and must be kept 10 years by the company (Code de commerce art. L123-22); the subscription stops renewing; the maintenance deletes on the date |
@@ -253,7 +253,8 @@ pinned in `lib/cloud/billing/stripe.ts`.
 - For accounting data, the client is the controller and Kledg Cloud the
   processor (RGPD art. 28, DPA at https://www.kledg.com/fr/dpa). For account
   and billing data, Kledg Cloud is the controller (privacy policy).
-- Portability (art. 20): the full export, per company, at any time.
+- Portability (art. 20): the full export, per company, at any time (see
+  [Data export](#data-export)).
 - Erasure (art. 17): account deletion as above; the books are deleted with
   the account once the client acknowledged its own retention duty (art.
   17.3.b does not oblige the processor to keep them).
@@ -277,6 +278,52 @@ pinned in `lib/cloud/billing/stripe.ts`.
   (by prefix in the Blob store). The CGV (art. 14), the DPA and the privacy
   policy must describe this retention before it applies to real clients.
 - The audit log keeps exports, deletions and trial extensions (ids only).
+
+## Data export
+
+`GET /api/cloud/export?companyId=` (company administrators, read-only
+accounts included) streams one ZIP per company
+(`lib/cloud/export/export-company-data.service.ts`, writer `zip.ts`):
+
+- `fec/`: the FEC of every fiscal year;
+- `donnees/*.json`: every record of the company, secrets removed by key
+  name, attachments as metadata (`pieces-justificatives.json`);
+- `justificatifs/`: the receipt files Kledg keeps for the company
+  (`receipt_files`), whatever their driver (PostgreSQL row, Vercel Blob, S3,
+  directory), read through the core receipt file store
+  (`readReceiptFileBytes`): from the file's own driver, checked against its
+  size and SHA-256 like every read. Each file is
+  `justificatifs/<yyyy-mm-dd>_<name>`: the date of the bank transaction or
+  expense line it justifies (else the receipt's date, else when it was
+  kept) and the name it was given, made unique with `-2`, `-3`;
+- `justificatifs/manifeste.csv` (semicolons, UTF-8 with BOM) and
+  `manifeste.json`: one row per file and per thing it justifies, with the
+  file's status (`inclus`, `introuvable` when missing from the storage or
+  altered, `illisible` when the storage failed, `non inclus` above the cap),
+  the bank transaction (id, date, label, amount, side), the expense line
+  (report id and number, line id, date, amount incl. VAT) or the receipt
+  waiting to be filed, the attachment id, SHA-256, size, type and driver. A
+  file left out is logged (`[Cloud export] Receipt file left out of the
+  export`) and the export goes on;
+- `LISEZMOI.txt`: what each folder holds.
+
+Streaming and limits: entries are produced one after the other
+(`receipt-files.ts` lists the files in pages of 200 without their bytes,
+then reads one file at a time and stores it without deflate, photos and
+PDFs being compressed already), so memory holds one file (5 MB at most for a
+receipt) plus the manifest rows. The ZIP writer has no ZIP64 (4 GiB per
+archive): when a company's receipt files add up to more than
+`MAX_EMBEDDED_RECEIPT_BYTES` (2 GiB), none is embedded, the manifest lists
+them all as `non inclus` and `LISEZMOI.txt` tells the client to ask support.
+The route runs within one function invocation (`maxDuration = 300` seconds
+on Vercel, the stream included); at the throughput of a Blob store in the
+same region a 2 GiB export fits, but a slow storage or a larger company
+needs another path: today the operator hands the files over (by prefix
+`receipts/<companyId>/` in the store, the manifest giving names and
+SHA-256); a background export to a private download link (Vercel Workflow or
+a job writing the ZIP to the Blob store) is the planned path for large
+exports. The export is rate limited (`cloud-export`, 10 per hour per user)
+and audited (`CLOUD_DATA_EXPORT`).
 
 ## Dedicated database (paid option, design)
 

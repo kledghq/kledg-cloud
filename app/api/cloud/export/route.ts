@@ -5,9 +5,13 @@ import { enforceRateLimit } from '@/lib/rate-limit'
 import { assertCloudMode } from '@/lib/cloud/http'
 import { companyExportArchive } from '@/lib/cloud/export/export-company-data.service'
 
+/** The archive streams within one function run: receipts included, a large company needs the time (docs/cloud.md#data-export). */
+export const maxDuration = 300
+
 /**
- * Full export of a company (?companyId=): its FEC per fiscal year and every
- * record as JSON, in a streamed ZIP (lib/cloud/export). Company
+ * Full export of a company (?companyId=): its FEC per fiscal year, every
+ * record as JSON and its receipt files with their manifest, in a streamed
+ * ZIP (lib/cloud/export). Company
  * administrators only (the data controller's copy); always available,
  * read-only accounts included.
  */
