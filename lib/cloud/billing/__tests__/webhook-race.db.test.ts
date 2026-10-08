@@ -125,4 +125,61 @@ describe.skipIf(!available)('Stripe webhook, concurrent events (KLEDG-R3-CLOUD-0
     expect(account.subscriptionStatus).toBe('canceled')
     expect((await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { id: 'ba-running' } })).subscriptionStatus).toBe('trialing')
   })
+
+  it('[KLEDG-CLOUD-005] a renewal never confirmed for seven days turns the companies read-only, until a reconciliation brings the new period', async () => {
+    const { resyncStaleBillingAccounts } = await import('@/lib/cloud/billing/stripe-webhook.service')
+    const { withSystemContext } = await import('@/lib/rls/context')
+    const { cloudCompanyWriteRefusal } = await import('@/lib/cloud/enforcement')
+    const now = new Date()
+    const days = (n: number) => new Date(now.getTime() + n * 86_400_000)
+    const company = await prisma.company.create({ data: { name: 'Renouvellement SAS', slug: 'renouvellement-sas', siren: '552100554' } })
+    await prisma.cloudBillingAccount.create({
+      data: {
+        id: 'ba-renewal',
+        ownerUserId: 'u-renewal',
+        stripeCustomerId: 'cus_TestRenewal001',
+        stripeSubscriptionId: 'sub_TestRenewal001',
+        subscriptionStatus: 'active',
+        planId: 'holding',
+        currentPeriodEnd: days(-8),
+        stripeSyncedAt: days(-38),
+        trialUsed: true,
+      },
+    })
+    await prisma.cloudCompanyOwnership.create({ data: { companyId: company.id, billingAccountId: 'ba-renewal' } })
+
+    // Neither the renewal webhook nor a reconciliation for seven days: read-only, billing_outdated.
+    const refusal = await withSystemContext('instance-extension', () => cloudCompanyWriteRefusal(company.id, now))
+    expect(refusal?.message).toContain("le renouvellement ou la fin de l'abonnement, de son titulaire n'a pas encore été confirmé")
+
+    // Stripe unreachable: the reconciliation fails, the account stays read-only.
+    const down = createStripe(['sk', 'test', 'kledgcloud'.repeat(3)].join('_'), (async () => new Response('{}', { status: 500 })) as unknown as typeof fetch)
+    await withSystemContext('instance-extension', () => resyncStaleBillingAccounts(() => down, now))
+    expect(await withSystemContext('instance-extension', () => cloudCompanyWriteRefusal(company.id, now))).not.toBeNull()
+
+    // The next successful reconciliation finds the subscription renewed: writable at once.
+    const renewed = createStripe(['sk', 'test', 'kledgcloud'.repeat(3)].join('_'), (async () =>
+      respond(subscriptionObject({ id: 'sub_TestRenewal001', customer: 'cus_TestRenewal001', status: 'active', periodEnd: days(22) }))) as unknown as typeof fetch)
+    expect(await withSystemContext('instance-extension', () => resyncStaleBillingAccounts(() => renewed, now))).toBe(1)
+    expect(await withSystemContext('instance-extension', () => cloudCompanyWriteRefusal(company.id, now))).toBeNull()
+  })
+
+  it('[KLEDG-CLOUD-005] never blocks a paying customer whose renewal webhook is merely late: the daily reconciliation reads Stripe first', async () => {
+    const { resyncStaleBillingAccounts } = await import('@/lib/cloud/billing/stripe-webhook.service')
+    const { withSystemContext } = await import('@/lib/rls/context')
+    const { accessOf } = await import('@/lib/cloud/billing/billing-account.service')
+    const now = new Date()
+    const days = (n: number) => new Date(now.getTime() + n * 86_400_000)
+    await prisma.cloudBillingAccount.create({
+      data: { id: 'ba-late', ownerUserId: 'u-late', stripeCustomerId: 'cus_TestLateHook01', stripeSubscriptionId: 'sub_TestLateHook01', subscriptionStatus: 'active', planId: 'holding', currentPeriodEnd: days(-2), stripeSyncedAt: days(-32), trialUsed: true },
+    })
+    // Two days late: still writable.
+    expect(accessOf(await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { id: 'ba-late' } }), now).writable).toBe(true)
+    // The reconciliation of that day reads Stripe, which kept the old period end (renewal still being processed): Stripe's word keeps it writable.
+    const stillProcessing = createStripe(['sk', 'test', 'kledgcloud'.repeat(3)].join('_'), (async () =>
+      respond(subscriptionObject({ id: 'sub_TestLateHook01', customer: 'cus_TestLateHook01', status: 'active', periodEnd: days(-2) }))) as unknown as typeof fetch)
+    await withSystemContext('instance-extension', () => resyncStaleBillingAccounts(() => stillProcessing, now))
+    const account = await prisma.cloudBillingAccount.findUniqueOrThrow({ where: { id: 'ba-late' } })
+    expect(accessOf(account, days(10)).writable).toBe(true)
+  })
 })

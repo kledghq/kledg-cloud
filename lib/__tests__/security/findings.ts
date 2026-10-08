@@ -441,7 +441,10 @@ export const CLOUD_FINDINGS = {
       'currentPeriodEnd with the clock for trialing and active). Fixed: a trialing snapshot, or an active one ' +
       'that does not renew, two days past its end is read-only (reason billing_outdated), and the daily ' +
       'maintenance reads again from Stripe every account whose trial or period ended (resyncStaleBillingAccounts, ' +
-      'same lock as the webhook). lib/cloud/billing/__tests__/state.test.ts, webhook-race.db.test.ts.',
+      'same lock as the webhook). Residual closed: an active snapshot that renews, seven days past its period ' +
+      'end with no read from Stripe since (no webhook, no successful reconciliation), is read-only too ' +
+      '(billing_outdated, RENEWAL_UNCONFIRMED_MS) until a reconciliation or a payment brings the new period. ' +
+      'lib/cloud/billing/__tests__/state.test.ts, webhook-race.db.test.ts.',
   },
   'KLEDG-CLOUD-006': {
     id: 'KLEDG-CLOUD-006',

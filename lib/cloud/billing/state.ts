@@ -21,6 +21,12 @@
  *     renew, by more than 2 days: the webhook missed the change Stripe made
  *     then (KLEDG-CLOUD-005), read-only until the daily reconciliation
  *     (resyncStaleBillingAccounts) reads the subscription again
+ *   active past the end of a period that renews, by more than 7 days, with
+ *     no read from Stripe since that end: the renewal was never confirmed
+ *     (neither webhook nor 7 daily reconciliations), read-only until a
+ *     reconciliation or a payment brings the new period. A paying customer
+ *     whose webhook is merely late is never blocked: the daily
+ *     reconciliation reads Stripe again from the first hour past the end
  *
  * Read-only never hides anything: reading, the FEC and the full data export
  * stay available. Only writes and new companies are refused
@@ -46,6 +52,8 @@ export interface BillingSnapshot {
   deletionScheduledFor: Date | null
   /** "requested" by the owner, or "contract_ended" (end of the retrieval period). */
   deletionReason: string | null
+  /** Time of the last read of the subscription from Stripe (webhook or daily reconciliation); absent: never. */
+  stripeSyncedAt?: Date | null
 }
 
 export interface BillingAccess {
@@ -78,6 +86,14 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * minutes; the daily reconciliation catches up the rest (KLEDG-CLOUD-005).
  */
 export const STALE_SNAPSHOT_MS = 2 * 24 * 60 * 60 * 1000
+
+/**
+ * How long past the end of a period that renews an "active" snapshot is
+ * believed without any read from Stripe since that end (KLEDG-CLOUD-005,
+ * residual): seven daily reconciliations, each of which would bring the new
+ * period of a subscription Stripe renewed.
+ */
+export const RENEWAL_UNCONFIRMED_MS = 7 * 24 * 60 * 60 * 1000
 
 export function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * DAY_MS)
@@ -147,6 +163,12 @@ export function billingAccess(snapshot: BillingSnapshot, now: Date, settings: { 
   if (status === 'active') {
     const endsAt = snapshot.cancelAtPeriodEnd ? snapshot.currentPeriodEnd : null
     if (outdated(endsAt)) return readOnly('billing_outdated', { endsAt })
+    // A renewal never confirmed: no read from Stripe since the period ended, 7 days on.
+    const periodEnd = snapshot.currentPeriodEnd
+    const confirmedSince = (at: Date) => (snapshot.stripeSyncedAt ?? null) !== null && snapshot.stripeSyncedAt!.getTime() > at.getTime()
+    if (!endsAt && periodEnd && now.getTime() > periodEnd.getTime() + RENEWAL_UNCONFIRMED_MS && !confirmedSince(periodEnd)) {
+      return readOnly('billing_outdated', { readOnlyAt: new Date(periodEnd.getTime() + RENEWAL_UNCONFIRMED_MS) })
+    }
     return { ...base, phase: 'active', writable: true, endsAt }
   }
   if (status && PAYMENT_ISSUE_STATUSES.has(status)) {

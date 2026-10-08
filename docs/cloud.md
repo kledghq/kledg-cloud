@@ -148,6 +148,13 @@ report, FEC and export keeps working, for every member of the company.
   renew, still mirrored as running two days after its end is read-only
   (`billing_outdated`), and the daily maintenance reads again from Stripe
   every account whose trial or period ended (`resyncStaleBillingAccounts`).
+  A period that renews gets seven days (`RENEWAL_UNCONFIRMED_MS`): read-only
+  (`billing_outdated`) only when nothing was read from Stripe since its end,
+  neither a webhook nor any of the daily reconciliations, until the next
+  successful reconciliation or payment brings the new period. A paying
+  customer whose webhook is merely late is never blocked: the daily
+  maintenance reads the subscription again from the first hour past the
+  end of the period.
 - No secret in the repository: keys come from the environment, prices from
   Stripe by lookup key.
 - Row level security (`KLEDG_RLS=enforce`): the cloud tables have their own

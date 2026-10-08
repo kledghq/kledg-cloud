@@ -12,7 +12,7 @@ const REASONS: Record<BillingReason, string> = {
   contract_ended: 'votre abonnement a pris fin',
   paused: 'votre abonnement est suspendu',
   deletion_requested: 'la suppression de votre compte est programmée',
-  billing_outdated: "la fin de votre essai ou de votre abonnement n'a pas encore été confirmée par notre prestataire de paiement",
+  billing_outdated: "la fin de votre essai, ou le renouvellement ou la fin de votre abonnement, n'a pas encore été confirmé par notre prestataire de paiement",
 }
 
 const OWNER_REASONS: Record<BillingReason, string> = {
@@ -21,7 +21,7 @@ const OWNER_REASONS: Record<BillingReason, string> = {
   contract_ended: "l'abonnement de son titulaire a pris fin",
   paused: "l'abonnement de son titulaire est suspendu",
   deletion_requested: 'la suppression du compte de son titulaire est programmée',
-  billing_outdated: "la fin de l'essai ou de l'abonnement de son titulaire n'a pas encore été confirmée par notre prestataire de paiement",
+  billing_outdated: "la fin de l'essai, ou le renouvellement ou la fin de l'abonnement, de son titulaire n'a pas encore été confirmé par notre prestataire de paiement",
 }
 
 /** Refusal of a first company: the trial starts by choosing a plan. */
@@ -35,7 +35,7 @@ export function readOnlyMessage(access: BillingAccess): string {
     return `Votre compte est en lecture seule : ${why}. Vous pouvez encore l'annuler et exporter vos données depuis la page Données et compte.`
   }
   if (access.reason === 'billing_outdated') {
-    return `Votre compte est en lecture seule : ${why}. Elle l'est en général sous 24 heures ; vous pouvez aussi vérifier votre abonnement depuis la page Facturation. Vos données restent consultables et exportables.`
+    return `Votre compte est en lecture seule : ${why}. Il l'est en général sous 24 heures ; vous pouvez aussi vérifier votre abonnement depuis la page Facturation. Vos données restent consultables et exportables.`
   }
   return `Votre compte est en lecture seule : ${why}. Choisissez une offre pour créer des sociétés et reprendre la saisie. Vos données restent consultables et exportables.`
 }

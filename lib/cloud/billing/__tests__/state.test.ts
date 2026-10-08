@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { addDays, billingAccess, daysLeft, hasEndedSubscription, hasLiveSubscription, type BillingSnapshot } from '../state'
+import { companyReadOnlyMessage, readOnlyMessage } from '../../messages'
 
 const settings = { graceDays: 14, retrievalDays: 30 }
 const now = new Date('2026-11-10T09:00:00Z')
@@ -136,6 +137,29 @@ describe('billing state', () => {
     // A period that renews is left to the reconciliation: a paying customer is never cut off for a late renewal event.
     const renewing = snapshot({ subscriptionStatus: 'active', planId: 'holding', currentPeriodEnd: end })
     expect(billingAccess(renewing, addDays(end, 3), settings)).toMatchObject({ phase: 'active', writable: true })
+  })
+
+  it('[KLEDG-CLOUD-005] gives a renewing period seven days without any read from Stripe, then read-only until reconciled or paid', () => {
+    const end = new Date('2026-11-01T00:00:00Z')
+    const lastRead = new Date('2026-10-01T00:05:00Z')
+    const renewing = snapshot({ subscriptionStatus: 'active', planId: 'holding', currentPeriodEnd: end, stripeSyncedAt: lastRead })
+    // A late renewal event: still writable for seven days.
+    expect(billingAccess(renewing, addDays(end, 3), settings)).toMatchObject({ phase: 'active', writable: true })
+    expect(billingAccess(renewing, addDays(end, 6.9), settings)).toMatchObject({ phase: 'active', writable: true })
+    // Seven days with no webhook and no successful reconciliation: read-only, with the billing_outdated message.
+    const outdated = billingAccess(renewing, addDays(end, 7.1), settings)
+    expect(outdated).toMatchObject({ phase: 'read_only', writable: false, reason: 'billing_outdated', companyLimit: 0, readOnlyAt: addDays(end, 7) })
+    expect(readOnlyMessage(outdated)).toContain('le renouvellement ou la fin de votre abonnement')
+    expect(companyReadOnlyMessage(outdated)).toContain("n'a pas encore été confirmé par notre prestataire de paiement")
+    // Never synced at all counts as unconfirmed too.
+    expect(billingAccess({ ...renewing, stripeSyncedAt: null }, addDays(end, 8), settings)).toMatchObject({ reason: 'billing_outdated' })
+
+    // A paying customer is never blocked: a reconciliation after the end that found the subscription still active keeps it writable...
+    const reconciled = { ...renewing, stripeSyncedAt: addDays(end, 0.05) }
+    expect(billingAccess(reconciled, addDays(end, 30), settings)).toMatchObject({ phase: 'active', writable: true })
+    // ...and the payment (or the reconciliation) that brings the new period restores access at once.
+    const paid = { ...renewing, currentPeriodEnd: new Date('2026-12-01T00:00:00Z'), stripeSyncedAt: addDays(end, 7.5) }
+    expect(billingAccess(paid, addDays(end, 7.6), settings)).toMatchObject({ phase: 'active', writable: true })
   })
 
   it('knows which statuses still bill and which ended', () => {
