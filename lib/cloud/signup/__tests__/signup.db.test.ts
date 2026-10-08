@@ -97,7 +97,7 @@ describe.skipIf(!available)('public sign-up', () => {
     await prisma.user.create({ data: { id: 'u-operator', email: 'operator@test.local', name: 'Opérateur', role: 'admin', emailVerified: true } })
   })
 
-  it('creates an unconfirmed account with its CGV acceptance (version 1.0 and date), and sends the confirmation link', async () => {
+  it('creates an unconfirmed account with its CGV acceptance (version 1.1 and date), and sends the confirmation link', async () => {
     const response = await signup(valid())
     expect(response.status).toBe(202)
     expect(await response.json()).toEqual({
@@ -112,8 +112,8 @@ describe.skipIf(!available)('public sign-up', () => {
     expect(user.accounts[0].password).not.toContain('un-mot-de-passe-solide')
 
     const acceptances = await prisma.cloudTermsAcceptance.findMany({ where: { userId: user.id }, orderBy: { document: 'asc' } })
-    expect(acceptances.map((a) => [a.document, a.version])).toEqual([['cgv', '1.0']])
-    expect(CURRENT_TERMS.cgv).toEqual({ version: '1.0', effective: '2026-10-04' })
+    expect(acceptances.map((a) => [a.document, a.version])).toEqual([['cgv', '1.1']])
+    expect(CURRENT_TERMS.cgv).toEqual({ version: '1.1', effective: '2026-10-08' })
     expect(Math.abs(acceptances[0].acceptedAt.getTime() - Date.now())).toBeLessThan(60_000)
 
     // No billing account yet: the trial starts when a plan is chosen.

@@ -104,8 +104,9 @@ function DeletionCard({ deletion: initial, email }: { deletion: DeletionPreview;
           <Alert variant="destructive">
             <AlertDescription>
               <span>
-                Votre compte et les données de vos sociétés seront supprimés le <DateDisplay value={deletion.scheduledFor} format="long" />. D&apos;ici là, le
-                compte est en lecture seule et vos exports restent disponibles.
+                Votre compte et les données de vos sociétés, justificatifs compris, seront supprimés le <DateDisplay value={deletion.scheduledFor} format="long" />.
+                D&apos;ici là, le compte est en lecture seule et vos exports restent disponibles&nbsp;: archivez l&apos;export complet de chaque société, qui
+                contient vos justificatifs, car votre société doit les conserver 10 ans.
               </span>
             </AlertDescription>
           </Alert>
@@ -131,7 +132,8 @@ function DeletionCard({ deletion: initial, email }: { deletion: DeletionPreview;
         </CardTitle>
         <CardDescription>
           La suppression a lieu {deletion.deletionDays} jours après votre demande. Pendant ce délai, votre compte est en lecture seule&nbsp;: vous pouvez annuler la
-          suppression et exporter vos données.
+          suppression et exporter vos données. Tout est alors supprimé, justificatifs compris&nbsp;: archivez l&apos;export complet de chaque société, que votre
+          société doit conserver 10 ans.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
@@ -167,8 +169,8 @@ function DeletionCard({ deletion: initial, email }: { deletion: DeletionPreview;
           <div className="flex items-start gap-2">
             <Checkbox id="delete-books" checked={acknowledge} onCheckedChange={(v) => setAcknowledge(v === true)} className="mt-0.5" />
             <Label htmlFor="delete-books" className="leading-snug font-normal">
-              J&apos;ai exporté mes livres comptables. Je sais qu&apos;ils seront supprimés définitivement et que ma société doit les conserver 10 ans (Code de
-              commerce art. L123-22).
+              J&apos;ai exporté mes livres comptables et mes justificatifs. Je sais qu&apos;ils seront supprimés définitivement, sans copie conservée par
+              Kledg, et que ma société doit les conserver 10 ans (Code de commerce art. L123-22).
             </Label>
           </div>
         ) : null}

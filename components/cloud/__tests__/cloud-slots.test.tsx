@@ -69,7 +69,7 @@ describe('cloud banner', () => {
   it('asks to accept new terms first', async () => {
     data.terms = ['cgv']
     render(await CloudBanner({ user, now }))
-    expect(screen.getByRole('status')).toHaveTextContent('évoluent (version 1.0). Lisez-les et acceptez-les pour continuer à utiliser Kledg.')
+    expect(screen.getByRole('status')).toHaveTextContent('évoluent (version 1.1). Lisez-les et acceptez-les pour continuer à utiliser Kledg.')
     expect(screen.getByRole('link', { name: 'conditions générales de vente' })).toHaveAttribute('href', 'https://www.kledg.com/fr/terms')
     expect(screen.getByRole('button', { name: "J'accepte" })).toBeInTheDocument()
   })

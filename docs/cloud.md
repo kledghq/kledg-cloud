@@ -99,10 +99,11 @@ companies stay writable up to the limit, the others are read-only (French
 operator archives one. A Cabinet trial stops at the 25 included companies:
 those beyond are billed, so they are created once the subscription is paid.
 
-## Account lifecycle (CGV version 1.0)
+## Account lifecycle (CGV version 1.1)
 
-The published CGV (https://www.kledg.com/fr/terms, version 1.0, in force
-since 4 October 2026) set what the code does. The state of an account is
+The published CGV (https://www.kledg.com/fr/terms, version 1.1, in force
+since 8 October 2026; 1.0 of 4 October 2026 kept the stored receipt
+objects) set what the code does. The state of an account is
 computed from the stored subscription and the time (`state.ts`), never by a
 job.
 
@@ -115,9 +116,9 @@ job.
 | Cancellation at any time, effective at period end (art. 12) | Customer Portal (default configuration) |
 | Export at any time, free: FEC per fiscal year, structured data, receipt files (art. 13) | Données et compte page: one ZIP per company; also in read-only and during the retrieval period |
 | After the contract ends: 30 days of read-only retrieval, an email with the end date, then deletion within 30 days (art. 14) | `canceled` and `incomplete_expired` (trial ended without a card included): read-only at once. The maintenance sends the notice with the retrieval end date and schedules the deletion for that date (at least 7 days after a late notice); subscribing again before it cancels the deletion |
-| Kledg keeps only what the law requires of it (art. 14) | the account, its companies and their books are deleted; Kledg's own invoices stay in Stripe. Exception: the stored objects of the receipt files are kept (see [Data, GDPR and retention](#data-gdpr-and-retention)) |
+| Kledg keeps only what the law requires of it; everything else is deleted, receipt files included, and leaves the backups within 7 days (art. 14) | the account, its companies, their books and the stored objects of their receipt files are deleted (rows first, then objects, failures retried by the maintenance); Kledg's own invoices stay in Stripe (see [Data, GDPR and retention](#data-gdpr-and-retention)) |
 | Account deletion on request, cancellable for 30 days, read-only meanwhile (art. 15) | Données et compte page: address, password and, when books exist, an acknowledgement that they will be deleted and must be kept 10 years by the company (Code de commerce art. L123-22); the subscription stops renewing; the maintenance deletes on the date |
-| Accepted CGV version and date stored at sign-up | `CloudTermsAcceptance` (`cgv`, `1.0`, date); a new version is accepted again from the banner (`lib/cloud/legal/terms.ts`) |
+| Accepted CGV version and date stored at sign-up | `CloudTermsAcceptance` (`cgv`, `1.1`, date); a new version is accepted again from the banner (`lib/cloud/legal/terms.ts`) |
 
 Read-only never hides data: every write of a company route or an MCP tool
 answers 409 with the reason and a link (`companyWriteRefusal`), every read,
@@ -260,23 +261,81 @@ pinned in `lib/cloud/billing/stripe.ts`.
   17.3.b does not oblige the processor to keep them).
 - Kledg's own invoices are issued and kept by Stripe (10 years, Code de
   commerce art. L123-22).
-- **Receipt files (retention decision)**: when the hosted service deletes
-  companies (account deletion requested by the owner, end of the contract
-  after the retrieval period, both through `purgeCompanies` in
-  `lib/cloud/account/account-deletion.service.ts`), the rows of their
-  receipt files and staged receipts go with them, but the stored objects in
-  the private Blob store are kept: the purge never deletes them, unlike
-  Kledg's `deleteCompany` (which deletes them after its commit). They stay
-  under `receipts/<companyId>/` with a random name, unreachable from the
-  application (no row points to them any more); the audit entry
-  `CLOUD_ACCOUNT_DELETED` records the companies and the number of objects
-  kept (`retainedReceiptObjects`). Bytes still stored in PostgreSQL (a file
-  not yet moved by `KLEDG_STORAGE_MIGRATE`) live in the row and are deleted
-  with it. The operator deleting an empty company from Kledg's own
-  interface (`DELETE /api/companies/[id]`, instance administrators only)
-  still goes through `deleteCompany`, which deletes its objects. Removing kept objects is a manual operator action
-  (by prefix in the Blob store). The CGV (art. 14), the DPA and the privacy
-  policy must describe this retention before it applies to real clients.
+- **End of the service: restitution, then deletion of everything,
+  receipt files included.** Policy of the hosted service, set by the
+  operator on 2026-10-08 (it replaces the earlier decision to keep the
+  stored receipt objects after a purge):
+  - Legal basis. For the books Kledg Cloud is a processor: at the end of
+    the service it must, at the controller's choice, delete or return all
+    the personal data and delete existing copies, unless Union or Member
+    State law requires their storage
+    ([RGPD art. 28(3)(g)](https://eur-lex.europa.eu/eli/reg/2016/679/oj/fra)).
+    No law requires Kledg to store its clients' books: the duty to keep the
+    books and supporting documents is the client company's, 10 years under
+    [Code de commerce art. L123-22](https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000006219327)
+    and 6 years for the tax administration under
+    [LPF art. L102 B](https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000041471233).
+    The controller chooses through the export: restitution during the
+    retrieval period, deletion after it.
+  - Restitution. During the 30 days after the end of the contract (trial
+    ended without a card, cancellation, unpaid until Stripe ended it:
+    `noticeEndedContracts`) or after an account deletion request
+    (`scheduleAccountDeletion`, `deletionDays`), the account is read-only
+    and the full export stays open: FEC, every record as JSON, and the
+    receipt files with their manifest (`justificatifs/`, see
+    [Data export](#data-export)). The scheduling email, the end of contract
+    email, the Données et compte page, the books acknowledgement and the
+    export's `LISEZMOI.txt` tell the client that the export holds the
+    receipts and must be archived by the company for 10 years.
+  - Deletion. At the date, `purgeCompanies`
+    (`lib/cloud/account/account-deletion.service.ts`) deletes the companies
+    with everything they hold (books, receipt file and staged receipt rows
+    by cascade, bytes still stored in PostgreSQL with their rows), then the
+    user, sessions, credentials, API keys, terms acceptances and billing
+    account. In the same transaction it records in
+    `cloud_pending_object_deletions` the key of every receipt object of the
+    companies (core helper `companyReceiptObjects`) and, with the Vercel Blob
+    store, each company's prefix `receipts/<companyId>/` (to catch an object
+    no row knows, from an upload whose cleanup failed). After the commit,
+    `lib/cloud/account/receipt-objects.service.ts` deletes each object
+    (core helper `discardObjects`), checks it is gone (`exists`), lists and
+    empties each prefix, and removes the pending rows that are done. Rows
+    first, objects after: no row ever points to a deleted object.
+  - Failures. A deletion that fails, or a crash after the commit, leaves
+    the pending row (attempts, last error); the daily maintenance retries
+    every pending row (`retryPendingObjectDeletions`, report field
+    `receiptObjects`) until it is gone, and logs each failure
+    (`[Cloud] Stored object of a purged company not deleted yet`). A row
+    whose attempts keep growing needs the operator (storage credentials,
+    store access).
+  - Audit. `CLOUD_ACCOUNT_DELETED` records the companies, the objects
+    deleted (`deletedReceiptObjects`) and those left pending
+    (`pendingReceiptObjects`); `CLOUD_RECEIPT_OBJECTS_DELETED` records the
+    objects a later run deleted. Together they back the deletion certificate
+    the client may ask for (DPA art. 10).
+  - Backups. The Neon project (Vercel Marketplace store
+    `store_ufsAQDPQtgjH2cQw`, Neon project `long-silence-83665657`) is on
+    the Neon Launch plan, whose restore window (history retention) is 1 day
+    by default and 7 days at most
+    ([Neon, history window](https://neon.com/docs/introduction/history-window)):
+    WAL outside the window is removed, so deleted rows leave the backups
+    within 7 days at most. The value actually configured on the project
+    could not be read from here (Neon API not authorized on 2026-10-08):
+    check it in the Neon console (Settings, Instant restore) and that no
+    scheduled snapshot keeps data longer; the legal texts say 7 days
+    (`serviceTerms.backupPurgeDelay` in the website's `lib/legal.ts`). The
+    private Blob store `kledg-cloud-receipts` (fra1) has no versioning nor
+    backup: a deleted object is gone, its cached copies expire within 60
+    seconds ([Vercel Blob](https://vercel.com/docs/vercel-blob#important-considerations-when-updating-blobs)).
+    Upgrading the Neon plan (Scale allows 30 days), lengthening the window
+    or adding snapshots means updating the CGV (art. 14), the DPA (art. 10)
+    and the privacy policy first.
+  - What stays: Kledg's own invoices (Stripe, 10 years, Code de commerce
+    art. L123-22) and the audit log entries of the hosted service (ids
+    only, no accounting content). The operator deleting an empty company
+    from Kledg's own interface (`DELETE /api/companies/[id]`, instance
+    administrators only) still goes through Kledg's `deleteCompany`, which
+    deletes its objects after its commit.
 - The audit log keeps exports, deletions and trial extensions (ids only).
 
 ## Data export

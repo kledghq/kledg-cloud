@@ -8,6 +8,8 @@
  *   retrieval period and of the deletion, and the deletion scheduled for
  *   that date (art. 14);
  * - account deletions whose date has come (art. 14 and 15);
+ * - stored receipt objects of purged companies whose deletion failed,
+ *   retried until they are gone (receipt-objects.service.ts, art. 14);
  * and keeps the books straight:
  * - the billed quantity of extra companies of Cabinet subscriptions;
  * - accounts whose address was never confirmed, deleted after a few days
@@ -38,6 +40,7 @@ import { PLANS, isPlanId } from './billing/plans'
 import { purgeProcessedStripeEvents, resyncStaleBillingAccounts } from './billing/stripe-webhook.service'
 import { syncAllCabinetExtraCompanies } from './billing/cabinet-extra.service'
 import { executeDueDeletions } from './account/account-deletion.service'
+import { retryPendingObjectDeletions } from './account/receipt-objects.service'
 import { contractEndedEmail, renewalReminderEmail } from './email-templates'
 
 /** Whether the request carries the CRON_SECRET bearer token (constant-time comparison). */
@@ -150,6 +153,8 @@ export interface MaintenanceReport {
   renewalReminders: number
   endedContracts: number
   deletions: { done: number; failed: number }
+  /** Pending deletions of stored objects of purged companies: objects deleted this run, rows still pending. */
+  receiptObjects: { deleted: number; pending: number }
   cabinetExtraUpdated: number
   unverifiedPurged: number
   stripeEventsPurged: number
@@ -167,6 +172,8 @@ async function runMaintenanceSteps(now: Date, stripe?: () => Stripe): Promise<Ma
     renewalReminders: await sendRenewalReminders(now),
     endedContracts: await noticeEndedContracts(now),
     deletions: await executeDueDeletions(now, stripe),
+    // After the deletions: what their own pass could not delete is retried here.
+    receiptObjects: await retryPendingObjectDeletions(now),
     cabinetExtraUpdated: await syncAllCabinetExtraCompanies(stripe),
     unverifiedPurged: await purgeUnverifiedAccounts(now),
     stripeEventsPurged: await purgeProcessedStripeEvents(now),

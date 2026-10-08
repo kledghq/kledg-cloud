@@ -104,6 +104,30 @@ model CloudTermsAcceptance {
   @@map("cloud_terms_acceptances")
 }
 
+/// Stored objects of purged companies still to delete (docs/cloud.md, Data,
+/// GDPR and retention): written in the purge transaction, removed once the
+/// object ("object") or every object under the prefix ("prefix",
+/// receipts/<companyId>/, Vercel Blob) is gone; the maintenance job retries
+/// what is left (lib/cloud/account/receipt-objects.service.ts).
+model CloudPendingObjectDeletion {
+  id            String    @id @default(cuid())
+  /// "object" (one key) or "prefix" (every object under it).
+  kind          String
+  /// lib/storage driver: "blob", "s3" or "fs".
+  storageDriver String
+  /// The object key, or the prefix ending with "/".
+  target        String
+  attempts      Int       @default(0)
+  lastAttemptAt DateTime?
+  /// Last failure, without credentials (the error message only).
+  lastError     String?
+  createdAt     DateTime  @default(now())
+
+  @@unique([storageDriver, target])
+  @@index([createdAt])
+  @@map("cloud_pending_object_deletions")
+}
+
 // --------------------------- end of Kledg Cloud ----------------------------
 
 enum CompanyLegalType {

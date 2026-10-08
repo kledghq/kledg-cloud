@@ -9,8 +9,13 @@
  *   deleted by the maintenance job, books included;
  * - end of contract (CGV art. 14): notice with the end of the 30 day
  *   retrieval period, deletion scheduled for that date, then executed;
- *   the receipt files' rows go with the companies, their objects in the
- *   object storage are kept (retention decision, docs/cloud.md);
+ *   the export of the retrieval period holds the receipt files, then the
+ *   purge deletes their rows and, after the commit, their objects in the
+ *   object storage, objects no row knew under the company's prefix
+ *   included (Kledg Cloud is the processor, docs/cloud.md);
+ * - a stored object whose deletion fails stays pending (never a row
+ *   pointing to a deleted object), and the maintenance job deletes it on a
+ *   later run;
  * - annual renewal reminder at least a month ahead (CGV art. 12), once;
  * - unconfirmed accounts purged; the cron requires CRON_SECRET;
  * - KLEDG_STORAGE_MIGRATE=on at server start moves receipt files from
@@ -52,7 +57,7 @@ vi.mock('@/lib/email', async (importOriginal) => ({
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
 import { form, stripeFetch } from './helpers/stripe-fixtures'
-import { unzip } from './helpers/unzip'
+import { unzip, unzipEntries } from './helpers/unzip'
 
 const available = await testDatabaseAvailable()
 
@@ -291,10 +296,13 @@ describe.skipIf(!available)('data lifecycle', () => {
       expect((await as(OWNER, () => routes.deletion.DELETE(request('DELETE', '/api/cloud/account/deletion')))).status).toBe(409)
       expect(await (await cron('test-cron-secret-0123456789')).json()).toMatchObject({ endedContracts: 0 })
 
-      // A receipt kept in the private Blob store (a fake here), staged and filed on a bank line.
+      // A receipt kept in the private Blob store (a fake here), staged and attached as a supporting document.
       const objects = new Map<string, Uint8Array>()
       const deleted: string[] = []
       const { setObjectStorageForTests } = await import('@/lib/storage')
+      const { setPrefixListerForTests } = await import('@/lib/cloud/account/receipt-objects.service')
+      vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_test')
+      setPrefixListerForTests({ keys: async (prefix) => [...objects.keys()].filter((k) => k.startsWith(prefix)) })
       setObjectStorageForTests('blob', {
         driver: 'blob',
         put: async (key, body) => void objects.set(key, body),
@@ -306,15 +314,35 @@ describe.skipIf(!available)('data lifecycle', () => {
         },
         exists: async (key) => objects.has(key),
       })
+      const { createHash } = await import('node:crypto')
+      const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0])
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
       const key = `receipts/${ids.atelier}/kept0123456789abcdef`
-      objects.set(key, new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))
+      objects.set(key, bytes)
+      // An object no row knows (an upload whose row was never created), under the company's prefix.
+      const orphan = `receipts/${ids.atelier}/orphan0123456789abcd`
+      objects.set(orphan, new Uint8Array([1, 2, 3]))
+      // Another company's object stays.
+      const otherKey = `receipts/${ids.other}/other0123456789abcdef`
+      objects.set(otherKey, new Uint8Array([4, 5, 6]))
       const file = await prisma.receiptFile.create({
-        data: { companyId: ids.atelier, sha256: 'a'.repeat(64), contentType: 'image/jpeg', size: 4, storageDriver: 'blob', storageKey: key },
+        data: { companyId: ids.atelier, sha256, contentType: 'image/jpeg', size: bytes.length, storageDriver: 'blob', storageKey: key },
       })
       await prisma.stagedReceipt.create({
-        data: { companyId: ids.atelier, fileId: file.id, sha256: 'a'.repeat(64), fileName: 'ticket.jpg', contentType: 'image/jpeg', size: 4, source: 'app', expiresAt: new Date(Date.now() + 30 * DAY) },
+        data: { companyId: ids.atelier, fileId: file.id, sha256, fileName: 'ticket.jpg', contentType: 'image/jpeg', size: bytes.length, source: 'app', expiresAt: new Date(Date.now() + 30 * DAY) },
       })
       await prisma.attachment.create({ data: { companyId: ids.atelier, fileName: 'ticket.jpg', receiptFileId: file.id } })
+
+      // During the retrieval period, the full export holds the receipt file and its manifest.
+      const archive = await as(OWNER, () => exportOf(ids.atelier))
+      expect(archive.status).toBe(200)
+      const entries = unzipEntries(new Uint8Array(await archive.arrayBuffer()))
+      const receiptEntries = Object.keys(entries).filter((name) => name.startsWith('justificatifs/') && name.endsWith('ticket.jpg'))
+      expect(receiptEntries).toHaveLength(1)
+      expect([...entries[receiptEntries[0]].bytes]).toEqual([...bytes])
+      const manifest = new TextDecoder().decode(entries['justificatifs/manifeste.csv'].bytes)
+      expect(manifest).toContain(sha256)
+      expect(manifest).toContain('inclus')
 
       // The retrieval period is over: the account, its companies and their books go.
       await prisma.cloudBillingAccount.update({ where: { id: 'ba-owner' }, data: { deletionScheduledFor: new Date(Date.now() - 1000) } })
@@ -326,19 +354,85 @@ describe.skipIf(!available)('data lifecycle', () => {
       expect(await prisma.authAccount.count({ where: { userId: OWNER.id } })).toBe(0)
       expect(await prisma.cloudBillingAccount.count({ where: { id: 'ba-owner' } })).toBe(0)
       expect(await prisma.cloudTermsAcceptance.count({ where: { userId: OWNER.id } })).toBe(0)
-      // Receipts: the rows go with the company, the stored object is kept (never deleted by the purge).
+      // Receipts: the rows go with the company, then the stored object and the orphan under its prefix.
       expect(await prisma.receiptFile.count({ where: { id: file.id } })).toBe(0)
       expect(await prisma.stagedReceipt.count({ where: { companyId: ids.atelier } })).toBe(0)
-      expect(deleted).toEqual([])
-      expect(objects.has(key)).toBe(true)
+      expect(deleted.sort()).toEqual([key, orphan].sort())
+      expect([...objects.keys()]).toEqual([otherKey])
+      expect(await prisma.cloudPendingObjectDeletion.count()).toBe(0)
       const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'CLOUD_ACCOUNT_DELETED' }, orderBy: { createdAt: 'desc' } })
-      expect(audit.metadata).toMatchObject({ companies: [ids.atelier], retainedReceiptObjects: 1 })
+      expect(audit.metadata).toMatchObject({ companies: [ids.atelier], deletedReceiptObjects: 2, pendingReceiptObjects: 0 })
+      expect(audit.metadata).not.toHaveProperty('retainedReceiptObjects')
       setObjectStorageForTests('blob', null)
+      setPrefixListerForTests(null)
       // The subscription was no longer live: nothing to cancel at Stripe.
       expect(api.calls.filter((c) => c.method === 'DELETE')).toEqual([])
       expect(state.emails.map((e) => [e.to, e.subject])).toEqual([[OWNER.email, 'Votre compte Kledg a été supprimé']])
       // Other companies are untouched.
       expect(await prisma.company.findUnique({ where: { id: ids.other } })).not.toBeNull()
+    })
+
+    it('keeps a stored object whose deletion failed pending, without its row, and deletes it on a later run', async () => {
+      const { createHash } = await import('node:crypto')
+      const { setObjectStorageForTests } = await import('@/lib/storage')
+      const { setPrefixListerForTests } = await import('@/lib/cloud/account/receipt-objects.service')
+      const user = await prisma.user.create({ data: { id: 'u-leaving', email: 'leaving@test.local', name: 'Partant', role: 'user', emailVerified: true } })
+      const account = await prisma.cloudBillingAccount.create({
+        data: { ownerUserId: user.id, deletionReason: 'requested', deletionRequestedAt: new Date(Date.now() - 31 * DAY), deletionScheduledFor: new Date(Date.now() - 1000) },
+      })
+      const company = await prisma.company.create({ data: { name: 'Partante', slug: 'partante', siren: '912345691' } })
+      await prisma.organization.create({ data: { id: 'org-partante', name: 'Partante', slug: 'org-partante', createdAt: new Date(), companyId: company.id } })
+      await prisma.member.create({ data: { id: 'm-partante', userId: user.id, organizationId: 'org-partante', role: 'companyAdmin', createdAt: new Date() } })
+      await prisma.cloudCompanyOwnership.create({ data: { companyId: company.id, billingAccountId: account.id } })
+      const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46])
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const key = `receipts/${company.id}/failing0123456789abcd`
+      await prisma.receiptFile.create({ data: { companyId: company.id, sha256, contentType: 'application/pdf', size: 4, storageDriver: 'blob', storageKey: key } })
+
+      // The store refuses deletions for now.
+      const objects = new Map<string, Uint8Array>([[key, bytes]])
+      let refuse = true
+      setObjectStorageForTests('blob', {
+        driver: 'blob',
+        put: async (k, body) => void objects.set(k, body),
+        get: async (k) => objects.get(k) ?? null,
+        getStream: async () => null,
+        delete: async (k) => {
+          if (refuse) throw new Error('Blob store unavailable')
+          objects.delete(k)
+        },
+        exists: async (k) => objects.has(k),
+      })
+      vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_test')
+      setPrefixListerForTests({ keys: async (prefix) => [...objects.keys()].filter((k) => k.startsWith(prefix)) })
+      try {
+        expect(await (await cron('test-cron-secret-0123456789')).json()).toMatchObject({ deletions: { done: 1, failed: 0 }, receiptObjects: { deleted: 0, pending: 2 } })
+        // The company and its rows are gone; the object waits, recorded for the next runs.
+        expect(await prisma.company.findUnique({ where: { id: company.id } })).toBeNull()
+        expect(await prisma.receiptFile.count({ where: { companyId: company.id } })).toBe(0)
+        expect(objects.has(key)).toBe(true)
+        const pending = await prisma.cloudPendingObjectDeletion.findMany({ orderBy: { kind: 'asc' } })
+        expect(pending.map((row) => [row.kind, row.storageDriver, row.target])).toEqual([
+          ['object', 'blob', key],
+          ['prefix', 'blob', `receipts/${company.id}/`],
+        ])
+        // Two attempts: the purge itself, then the retry step of the same run.
+        expect(pending.every((row) => row.attempts === 2 && row.lastAttemptAt !== null)).toBe(true)
+        const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'CLOUD_ACCOUNT_DELETED' }, orderBy: { createdAt: 'desc' } })
+        expect(audit.metadata).toMatchObject({ companies: [company.id], deletedReceiptObjects: 0, pendingReceiptObjects: 2 })
+
+        // The store is back: the next run deletes the object and clears the pending rows.
+        refuse = false
+        expect(await (await cron('test-cron-secret-0123456789')).json()).toMatchObject({ receiptObjects: { deleted: 1, pending: 0 } })
+        expect(objects.size).toBe(0)
+        expect(await prisma.cloudPendingObjectDeletion.count()).toBe(0)
+        const retried = await prisma.auditLog.findFirstOrThrow({ where: { action: 'CLOUD_RECEIPT_OBJECTS_DELETED' }, orderBy: { createdAt: 'desc' } })
+        expect(retried.metadata).toMatchObject({ deletedReceiptObjects: 1, pendingReceiptObjects: 0 })
+        expect(await (await cron('test-cron-secret-0123456789')).json()).toMatchObject({ receiptObjects: { deleted: 0, pending: 0 } })
+      } finally {
+        setObjectStorageForTests('blob', null)
+        setPrefixListerForTests(null)
+      }
     })
 
     it('deletes accounts never confirmed after a week, and only those', async () => {

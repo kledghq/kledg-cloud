@@ -59,7 +59,7 @@ describe.skipIf(!available)('terms acceptance', () => {
     expect(await pendingTerms(USER.id)).toEqual([])
     const rows = await prisma.cloudTermsAcceptance.findMany({ where: { userId: USER.id }, orderBy: { document: 'asc' } })
     expect(rows.map((r) => [r.document, r.version])).toEqual([['cgv', CURRENT_TERMS.cgv.version]])
-    expect(currentTermsVersion()).toBe('cgv:1.0')
+    expect(currentTermsVersion()).toBe('cgv:1.1')
     // Accepting again changes nothing.
     expect((await accept(currentTermsVersion())).status).toBe(200)
     expect(await prisma.cloudTermsAcceptance.count({ where: { userId: USER.id } })).toBe(1)

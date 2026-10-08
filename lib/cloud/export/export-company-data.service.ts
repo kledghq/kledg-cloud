@@ -157,7 +157,14 @@ donnees/
   Les montants sont des chaînes décimales, les dates au format ISO 8601.
   Les identifiants de connexion bancaire et autres secrets ne sont jamais
   exportés.
-${receiptsReadme(receipts)}`
+${receiptsReadme(receipts)}
+Conservation
+  Votre société doit conserver ses livres et ses pièces justificatives
+  pendant dix ans (Code de commerce art. L123-22 ; six ans pour
+  l'administration fiscale, livre des procédures fiscales art. L102 B). Kledg Cloud ne les archive pas pour elle : à la fin
+  du contrat, après la période de récupération, toutes les données de la
+  société sont supprimées, justificatifs compris. Gardez cette archive.
+`
 
 /** The entries of the archive of one company, built one after the other. */
 export async function* companyExportEntries(companyId: string, now: Date = new Date(), receipts: ReceiptExportOptions = {}): AsyncGenerator<ZipEntry> {

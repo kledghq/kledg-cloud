@@ -19,11 +19,13 @@
  * days the CGV allow): the subscription is cancelled if still live, every
  * company the account owns is deleted with its books, then the user,
  * sessions, credentials, API keys, terms acceptances and billing account.
- * A confirmation email goes to the former address. Kledg keeps only what
- * the law requires of it: its own invoices, kept by Stripe. Exception,
- * retention decision of the hosted service (docs/cloud.md, Data, GDPR and
- * retention): the stored objects of the companies' receipt files stay in
- * the object storage (purgeCompanies).
+ * The stored objects of the companies' receipt files are deleted after
+ * the rows (purgeCompanies, receipt-objects.service.ts). A confirmation
+ * email goes to the former address. Kledg keeps only what the law requires
+ * of it: its own invoices, kept by Stripe. Keeping the books and receipts
+ * is the client company's duty (10 years, Code de commerce art. L123-22; 6
+ * years for the tax administration, LPF art. L102 B), through the full
+ * export of the retrieval period.
  *
  * An account that is the last administrator of a company it does not own
  * cannot be deleted until another administrator is named there (Kledg's
@@ -48,6 +50,7 @@ import { accountDeletedEmail, deletionScheduledEmail } from '../email-templates'
 import { ensureBillingAccount, findBillingAccount, ownedCompanyIds } from '../billing/billing-account.service'
 import { addDays, hasLiveSubscription } from '../billing/state'
 import { getStripe } from '../billing/stripe'
+import { deletePendingObjects, recordCompanyObjects } from './receipt-objects.service'
 
 export interface DeletionCompany {
   id: string
@@ -107,7 +110,7 @@ export const ScheduleDeletionSchema = z.object({
 export type ScheduleDeletionInput = z.infer<typeof ScheduleDeletionSchema>
 
 export const BOOKS_ACKNOWLEDGEMENT_MESSAGE =
-  'Confirmez que vous avez exporté vos livres comptables : ils seront supprimés définitivement avec votre compte, et votre société doit les conserver 10 ans (Code de commerce art. L123-22).'
+  'Confirmez que vous avez exporté vos livres comptables : ils seront supprimés définitivement avec votre compte, justificatifs compris, et votre société doit conserver ses livres et ses pièces justificatives 10 ans (Code de commerce art. L123-22).'
 
 async function verifyPassword(userId: string, password: string): Promise<boolean> {
   const credential = await prisma.authAccount.findFirst({ where: { userId, providerId: 'credential' }, select: { password: true } })
@@ -172,36 +175,38 @@ export async function cancelAccountDeletion(user: CurrentUser): Promise<Deletion
 }
 
 export interface PurgeOutcome {
-  /** Receipt files whose object was left in the object storage (retention decision below). */
-  retainedReceiptObjects: number
+  /** Stored receipt objects deleted after the rows. */
+  deletedReceiptObjects: number
+  /** Objects or prefixes whose deletion failed: kept in cloud_pending_object_deletions, retried by the maintenance job. */
+  pendingReceiptObjects: number
 }
 
 /**
- * Deletes companies with their books (Kledg's triggers keep them otherwise).
- *
- * Receipt files, retention decision of Kledg Cloud (docs/cloud.md, Data,
- * GDPR and retention): their rows, and those of the staged receipts, go with
- * the companies (ON DELETE CASCADE), but the objects of the files kept in
- * object storage (the private Vercel Blob store, keys
- * receipts/<companyId>/<random>) are NOT deleted. Kledg's deleteCompany
- * deletes them after its commit (lib/receipts/receipt-file-store.ts,
- * discardObjects); this purge deliberately never calls it. Bytes still
- * stored in PostgreSQL (receipt_files.content, a file not yet moved by
- * KLEDG_STORAGE_MIGRATE) live in the row and go with it.
+ * Deletes companies with their books (Kledg's triggers keep them otherwise)
+ * and, after the commit, the stored objects of their receipt files (Kledg
+ * Cloud is the processor: RGPD art. 28(3)(g), docs/cloud.md, Data, GDPR and
+ * retention). The rows of the receipt files and staged receipts go with the
+ * companies (ON DELETE CASCADE); the objects to delete are recorded in the
+ * same transaction (recordCompanyObjects), so a failure or a crash after
+ * the commit leaves them pending for the maintenance job, never a row
+ * pointing to a deleted object. Bytes still stored in PostgreSQL
+ * (receipt_files.content) live in the row and go with it.
  */
 export async function purgeCompanies(companyIds: string[]): Promise<PurgeOutcome> {
-  if (companyIds.length === 0) return { retainedReceiptObjects: 0 }
-  return prisma.$transaction(async (tx) => {
+  if (companyIds.length === 0) return { deletedReceiptObjects: 0, pendingReceiptObjects: 0 }
+  const pending = await prisma.$transaction(async (tx) => {
     // The transaction-scoped bypasses Kledg provides for intended deletions
     // of closed years and companies with books (migrations 20261004090000
     // and 20261013090000).
     await tx.$queryRaw`SELECT set_config('kledg.closed_year_bypass', 'on', true), set_config('kledg.company_purge', 'on', true)`
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`
-    const retainedReceiptObjects = await tx.receiptFile.count({ where: { companyId: { in: companyIds }, storageKey: { not: null } } })
+    const objects = await recordCompanyObjects(tx, companyIds)
     await tx.company.deleteMany({ where: { id: { in: companyIds } } })
     await tx.address.deleteMany({ where: { companyId: { in: companyIds } } })
-    return { retainedReceiptObjects }
+    return objects
   })
+  const { deleted, pending: left } = await deletePendingObjects(pending)
+  return { deletedReceiptObjects: deleted, pendingReceiptObjects: left }
 }
 
 export interface DeletionOutcome {
@@ -224,7 +229,7 @@ export async function executeAccountDeletion(billingAccountId: string, options: 
     await (options.stripe ?? getStripe)().subscriptions.cancel(account.stripeSubscriptionId, { invoice_now: false, prorate: false })
   }
 
-  const { retainedReceiptObjects } = await purgeCompanies(companies.map((c) => c.id))
+  const { deletedReceiptObjects, pendingReceiptObjects } = await purgeCompanies(companies.map((c) => c.id))
   await prisma.$transaction(async (tx) => {
     if (user) {
       // API keys reference their user without a foreign key (lib/auth.ts, afterDelete).
@@ -237,8 +242,8 @@ export async function executeAccountDeletion(billingAccountId: string, options: 
 
   await writeAuditLog('warn', 'Account deleted', {
     action: 'CLOUD_ACCOUNT_DELETED',
-    // retainedReceiptObjects: receipt objects left in storage under receipts/<companyId>/ (purgeCompanies).
-    metadata: { userId: account.ownerUserId, reason: account.deletionReason, companies: companies.map((c) => c.id), retainedReceiptObjects },
+    // Receipt objects deleted from the object storage, and those left pending for the maintenance job (purgeCompanies).
+    metadata: { userId: account.ownerUserId, reason: account.deletionReason, companies: companies.map((c) => c.id), deletedReceiptObjects, pendingReceiptObjects },
   })
   if (user) {
     await sendEmail(accountDeletedEmail(user.email, LEGAL_URLS.privacy)).catch((error: unknown) => logger.error('Account deletion email failed', { error }))
