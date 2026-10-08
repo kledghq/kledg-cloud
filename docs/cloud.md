@@ -123,6 +123,21 @@ Read-only never hides data: every write of a company route or an MCP tool
 answers 409 with the reason and a link (`companyWriteRefusal`), every read,
 report, FEC and export keeps working, for every member of the company.
 
+A read-only company also stops receiving bank operations (Kledg issue #15,
+`lib/banking/sync-pause.ts`, which reads the same `companyWriteRefusal`):
+the daily bank sync skips it and manual syncs do not call the bank; the
+Comptes bancaires page says why. Its last sync date stays, so once the
+account is writable again (payment, new subscription, reconciliation) the
+next sync catches up the paused period.
+
+Company administrators invite their members and accountant themselves by
+email (Kledg issue #13, `lib/rbac/company-invitations.service.ts`). The
+hosted service keeps Kledg's defaults: invitations allowed, and an invitee
+without an account creates it from the link (the link confirms the address;
+the CGV are then accepted from the banner). Members never count against a
+plan, so no plan limits invitations; a read-only company neither sends nor
+accepts them.
+
 ## Sign-up and security
 
 - Public sign-up at `/inscription` (Kledg keeps `/signup` as a permanent redirect
@@ -295,9 +310,6 @@ légales), and the support address shown in the emails.
 
 ## Known limitations
 
-- Members are added by instance administrators (Kledg's rule): customers
-  cannot invite their accountant themselves yet.
 - Customers cannot archive or delete a company to free a slot of their
   plan; the operator does it.
-- The daily bank sync keeps importing bank lines for read-only companies.
 - One trial per account, not per person: a new address gets a new trial.
