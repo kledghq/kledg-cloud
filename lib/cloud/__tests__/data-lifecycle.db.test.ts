@@ -9,8 +9,14 @@
  *   deleted by the maintenance job, books included;
  * - end of contract (CGV art. 14): notice with the end of the 30 day
  *   retrieval period, deletion scheduled for that date, then executed;
+ *   the receipt files' rows go with the companies, their objects in the
+ *   object storage are kept (retention decision, docs/cloud.md);
  * - annual renewal reminder at least a month ahead (CGV art. 12), once;
- * - unconfirmed accounts purged; the cron requires CRON_SECRET.
+ * - unconfirmed accounts purged; the cron requires CRON_SECRET;
+ * - KLEDG_STORAGE_MIGRATE=on at server start moves receipt files from
+ *   PostgreSQL to the Blob store (a fake) in its own system context
+ *   ('storage-migration'), without the tests' system fallback, so it works
+ *   under KLEDG_RLS=enforce as in production.
  *
  * Skipped when the test database server is unreachable.
  */
@@ -218,6 +224,40 @@ describe.skipIf(!available)('data lifecycle', () => {
     })
   })
 
+  describe('receipt storage', () => {
+    it('moves receipt files to the Blob store at server start, in the storage-migration context (KLEDG_RLS=enforce)', async () => {
+      const { createHash } = await import('node:crypto')
+      const { setObjectStorageForTests } = await import('@/lib/storage')
+      const { migrateReceiptStorageOnStart } = await import('@/lib/receipts/migrate-receipt-storage.service')
+      const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 1])
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const file = await prisma.receiptFile.create({ data: { companyId: ids.other, sha256, contentType: 'image/jpeg', size: bytes.length, content: bytes } })
+      const objects = new Map<string, Uint8Array>()
+      setObjectStorageForTests('blob', {
+        driver: 'blob',
+        put: async (key, body) => void objects.set(key, body),
+        get: async (key) => objects.get(key) ?? null,
+        getStream: async () => null,
+        delete: async (key) => void objects.delete(key),
+        exists: async (key) => objects.has(key),
+      })
+      vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_test')
+      // No fallback context: the migration runs as at server start, with only the context it sets itself.
+      vi.stubEnv('KLEDG_RLS_TEST_CONTEXT', '')
+      try {
+        await migrateReceiptStorageOnStart({ KLEDG_STORAGE_MIGRATE: 'on' })
+      } finally {
+        vi.stubEnv('KLEDG_RLS_TEST_CONTEXT', process.env.KLEDG_RLS === 'enforce' ? 'system' : '')
+        setObjectStorageForTests('blob', null)
+      }
+      const moved = await prisma.receiptFile.findUniqueOrThrow({ where: { id: file.id } })
+      expect([moved.storageDriver, moved.content]).toEqual(['blob', null])
+      expect(moved.storageKey).toMatch(new RegExp(`^receipts/${ids.other}/`))
+      expect(objects.get(moved.storageKey!)).toEqual(bytes)
+      await prisma.receiptFile.delete({ where: { id: file.id } })
+    })
+  })
+
   describe('maintenance job', () => {
     it('requires the CRON_SECRET bearer token', async () => {
       expect((await cron()).status).toBe(401)
@@ -251,6 +291,31 @@ describe.skipIf(!available)('data lifecycle', () => {
       expect((await as(OWNER, () => routes.deletion.DELETE(request('DELETE', '/api/cloud/account/deletion')))).status).toBe(409)
       expect(await (await cron('test-cron-secret-0123456789')).json()).toMatchObject({ endedContracts: 0 })
 
+      // A receipt kept in the private Blob store (a fake here), staged and filed on a bank line.
+      const objects = new Map<string, Uint8Array>()
+      const deleted: string[] = []
+      const { setObjectStorageForTests } = await import('@/lib/storage')
+      setObjectStorageForTests('blob', {
+        driver: 'blob',
+        put: async (key, body) => void objects.set(key, body),
+        get: async (key) => objects.get(key) ?? null,
+        getStream: async () => null,
+        delete: async (key) => {
+          deleted.push(key)
+          objects.delete(key)
+        },
+        exists: async (key) => objects.has(key),
+      })
+      const key = `receipts/${ids.atelier}/kept0123456789abcdef`
+      objects.set(key, new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))
+      const file = await prisma.receiptFile.create({
+        data: { companyId: ids.atelier, sha256: 'a'.repeat(64), contentType: 'image/jpeg', size: 4, storageDriver: 'blob', storageKey: key },
+      })
+      await prisma.stagedReceipt.create({
+        data: { companyId: ids.atelier, fileId: file.id, sha256: 'a'.repeat(64), fileName: 'ticket.jpg', contentType: 'image/jpeg', size: 4, source: 'app', expiresAt: new Date(Date.now() + 30 * DAY) },
+      })
+      await prisma.attachment.create({ data: { companyId: ids.atelier, fileName: 'ticket.jpg', receiptFileId: file.id } })
+
       // The retrieval period is over: the account, its companies and their books go.
       await prisma.cloudBillingAccount.update({ where: { id: 'ba-owner' }, data: { deletionScheduledFor: new Date(Date.now() - 1000) } })
       state.emails.length = 0
@@ -261,6 +326,14 @@ describe.skipIf(!available)('data lifecycle', () => {
       expect(await prisma.authAccount.count({ where: { userId: OWNER.id } })).toBe(0)
       expect(await prisma.cloudBillingAccount.count({ where: { id: 'ba-owner' } })).toBe(0)
       expect(await prisma.cloudTermsAcceptance.count({ where: { userId: OWNER.id } })).toBe(0)
+      // Receipts: the rows go with the company, the stored object is kept (never deleted by the purge).
+      expect(await prisma.receiptFile.count({ where: { id: file.id } })).toBe(0)
+      expect(await prisma.stagedReceipt.count({ where: { companyId: ids.atelier } })).toBe(0)
+      expect(deleted).toEqual([])
+      expect(objects.has(key)).toBe(true)
+      const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'CLOUD_ACCOUNT_DELETED' }, orderBy: { createdAt: 'desc' } })
+      expect(audit.metadata).toMatchObject({ companies: [ids.atelier], retainedReceiptObjects: 1 })
+      setObjectStorageForTests('blob', null)
       // The subscription was no longer live: nothing to cancel at Stripe.
       expect(api.calls.filter((c) => c.method === 'DELETE')).toEqual([])
       expect(state.emails.map((e) => [e.to, e.subject])).toEqual([[OWNER.email, 'Votre compte Kledg a été supprimé']])

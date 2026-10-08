@@ -115,7 +115,7 @@ job.
 | Cancellation at any time, effective at period end (art. 12) | Customer Portal (default configuration) |
 | Export at any time, free: FEC per fiscal year, structured data (art. 13) | Données et compte page: one ZIP per company; also in read-only and during the retrieval period |
 | After the contract ends: 30 days of read-only retrieval, an email with the end date, then deletion within 30 days (art. 14) | `canceled` and `incomplete_expired` (trial ended without a card included): read-only at once. The maintenance sends the notice with the retrieval end date and schedules the deletion for that date (at least 7 days after a late notice); subscribing again before it cancels the deletion |
-| Kledg keeps only what the law requires of it (art. 14) | the account, its companies and their books are deleted; Kledg's own invoices stay in Stripe |
+| Kledg keeps only what the law requires of it (art. 14) | the account, its companies and their books are deleted; Kledg's own invoices stay in Stripe. Exception: the stored objects of the receipt files are kept (see [Data, GDPR and retention](#data-gdpr-and-retention)) |
 | Account deletion on request, cancellable for 30 days, read-only meanwhile (art. 15) | Données et compte page: address, password and, when books exist, an acknowledgement that they will be deleted and must be kept 10 years by the company (Code de commerce art. L123-22); the subscription stops renewing; the maintenance deletes on the date |
 | Accepted CGV version and date stored at sign-up | `CloudTermsAcceptance` (`cgv`, `1.0`, date); a new version is accepted again from the banner (`lib/cloud/legal/terms.ts`) |
 
@@ -137,6 +137,12 @@ without an account creates it from the link (the link confirms the address;
 the CGV are then accepted from the banner). Members never count against a
 plan, so no plan limits invitations; a read-only company neither sends nor
 accepts them.
+
+Company administrators also remove members, and any member leaves a company
+(Kledg 0.4.0, instance action `remove-member`, `lib/rbac/remove-member.service.ts`):
+the hosted service keeps Kledg's default and allows it. Members never count
+against a plan, so no plan rule applies; a read-only company refuses it like
+any other write (`companyWriteRefusal`).
 
 ## Sign-up and security
 
@@ -212,6 +218,8 @@ Kledg's own variables ([configuration.md](configuration.md)), plus
 | `BETTER_AUTH_URL` | `https://app.kledg.com` |
 | `RESEND_API_KEY`, `EMAIL_FROM` | transactional emails (confirmation links, reminders, notices) |
 | `CRON_SECRET` | the daily crons |
+| `BLOB_READ_WRITE_TOKEN` | the private Vercel Blob store of the receipt files (connected to the project); see [configuration.md](configuration.md) |
+| `KLEDG_STORAGE_MIGRATE` | `on`: at server start, receipt files still stored in PostgreSQL move to the Blob store (system context `storage-migration`, allowed under `KLEDG_RLS=enforce`) |
 | `ADMIN_EMAIL`, `SETUP_TOKEN` | the operator account, created at `/setup` before opening |
 | `KLEDG_CLOUD_TRIAL_DAYS`, `..._GRACE_DAYS`, `..._RETRIEVAL_DAYS`, `..._DELETION_DAYS`, `..._RENEWAL_NOTICE_DAYS`, `..._UNVERIFIED_DAYS` | optional; the defaults are the CGV's |
 
@@ -251,6 +259,23 @@ pinned in `lib/cloud/billing/stripe.ts`.
   17.3.b does not oblige the processor to keep them).
 - Kledg's own invoices are issued and kept by Stripe (10 years, Code de
   commerce art. L123-22).
+- **Receipt files (retention decision)**: when the hosted service deletes
+  companies (account deletion requested by the owner, end of the contract
+  after the retrieval period, both through `purgeCompanies` in
+  `lib/cloud/account/account-deletion.service.ts`), the rows of their
+  receipt files and staged receipts go with them, but the stored objects in
+  the private Blob store are kept: the purge never deletes them, unlike
+  Kledg's `deleteCompany` (which deletes them after its commit). They stay
+  under `receipts/<companyId>/` with a random name, unreachable from the
+  application (no row points to them any more); the audit entry
+  `CLOUD_ACCOUNT_DELETED` records the companies and the number of objects
+  kept (`retainedReceiptObjects`). Bytes still stored in PostgreSQL (a file
+  not yet moved by `KLEDG_STORAGE_MIGRATE`) live in the row and are deleted
+  with it. The operator deleting an empty company from Kledg's own
+  interface (`DELETE /api/companies/[id]`, instance administrators only)
+  still goes through `deleteCompany`, which deletes its objects. Removing kept objects is a manual operator action
+  (by prefix in the Blob store). The CGV (art. 14), the DPA and the privacy
+  policy must describe this retention before it applies to real clients.
 - The audit log keeps exports, deletions and trial extensions (ids only).
 
 ## Dedicated database (paid option, design)

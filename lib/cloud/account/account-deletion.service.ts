@@ -20,7 +20,10 @@
  * company the account owns is deleted with its books, then the user,
  * sessions, credentials, API keys, terms acceptances and billing account.
  * A confirmation email goes to the former address. Kledg keeps only what
- * the law requires of it: its own invoices, kept by Stripe.
+ * the law requires of it: its own invoices, kept by Stripe. Exception,
+ * retention decision of the hosted service (docs/cloud.md, Data, GDPR and
+ * retention): the stored objects of the companies' receipt files stay in
+ * the object storage (purgeCompanies).
  *
  * An account that is the last administrator of a company it does not own
  * cannot be deleted until another administrator is named there (Kledg's
@@ -168,17 +171,36 @@ export async function cancelAccountDeletion(user: CurrentUser): Promise<Deletion
   return previewAccountDeletion(user)
 }
 
-/** Deletes companies with their books (Kledg's triggers keep them otherwise). */
-export async function purgeCompanies(companyIds: string[]): Promise<void> {
-  if (companyIds.length === 0) return
-  await prisma.$transaction(async (tx) => {
+export interface PurgeOutcome {
+  /** Receipt files whose object was left in the object storage (retention decision below). */
+  retainedReceiptObjects: number
+}
+
+/**
+ * Deletes companies with their books (Kledg's triggers keep them otherwise).
+ *
+ * Receipt files, retention decision of Kledg Cloud (docs/cloud.md, Data,
+ * GDPR and retention): their rows, and those of the staged receipts, go with
+ * the companies (ON DELETE CASCADE), but the objects of the files kept in
+ * object storage (the private Vercel Blob store, keys
+ * receipts/<companyId>/<random>) are NOT deleted. Kledg's deleteCompany
+ * deletes them after its commit (lib/receipts/receipt-file-store.ts,
+ * discardObjects); this purge deliberately never calls it. Bytes still
+ * stored in PostgreSQL (receipt_files.content, a file not yet moved by
+ * KLEDG_STORAGE_MIGRATE) live in the row and go with it.
+ */
+export async function purgeCompanies(companyIds: string[]): Promise<PurgeOutcome> {
+  if (companyIds.length === 0) return { retainedReceiptObjects: 0 }
+  return prisma.$transaction(async (tx) => {
     // The transaction-scoped bypasses Kledg provides for intended deletions
     // of closed years and companies with books (migrations 20261004090000
     // and 20261013090000).
     await tx.$queryRaw`SELECT set_config('kledg.closed_year_bypass', 'on', true), set_config('kledg.company_purge', 'on', true)`
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`
+    const retainedReceiptObjects = await tx.receiptFile.count({ where: { companyId: { in: companyIds }, storageKey: { not: null } } })
     await tx.company.deleteMany({ where: { id: { in: companyIds } } })
     await tx.address.deleteMany({ where: { companyId: { in: companyIds } } })
+    return { retainedReceiptObjects }
   })
 }
 
@@ -202,7 +224,7 @@ export async function executeAccountDeletion(billingAccountId: string, options: 
     await (options.stripe ?? getStripe)().subscriptions.cancel(account.stripeSubscriptionId, { invoice_now: false, prorate: false })
   }
 
-  await purgeCompanies(companies.map((c) => c.id))
+  const { retainedReceiptObjects } = await purgeCompanies(companies.map((c) => c.id))
   await prisma.$transaction(async (tx) => {
     if (user) {
       // API keys reference their user without a foreign key (lib/auth.ts, afterDelete).
@@ -215,7 +237,8 @@ export async function executeAccountDeletion(billingAccountId: string, options: 
 
   await writeAuditLog('warn', 'Account deleted', {
     action: 'CLOUD_ACCOUNT_DELETED',
-    metadata: { userId: account.ownerUserId, reason: account.deletionReason, companies: companies.map((c) => c.id) },
+    // retainedReceiptObjects: receipt objects left in storage under receipts/<companyId>/ (purgeCompanies).
+    metadata: { userId: account.ownerUserId, reason: account.deletionReason, companies: companies.map((c) => c.id), retainedReceiptObjects },
   })
   if (user) {
     await sendEmail(accountDeletedEmail(user.email, LEGAL_URLS.privacy)).catch((error: unknown) => logger.error('Account deletion email failed', { error }))
