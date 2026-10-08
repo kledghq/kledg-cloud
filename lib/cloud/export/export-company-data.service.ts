@@ -118,7 +118,7 @@ fec/
   dans tout logiciel de comptabilité français.
 
 donnees/
-  Toutes les données de la société au format JSON, une table par fichier :
+  Toutes les données de la société au format JSON, une table par fichier :
   société, adresses, établissements, associés, personnes, régimes fiscaux,
   exercices, journaux, plan de comptes, écritures (avec leurs lignes),
   connexions et comptes bancaires, transactions, immobilisations, tiers,
