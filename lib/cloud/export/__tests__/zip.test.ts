@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { crc32, zipReadableStream, zipStream } from '../zip'
-import { unzip } from '../../__tests__/helpers/unzip'
+import { unzip, unzipEntries } from '../../__tests__/helpers/unzip'
 
 async function collect(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
   const parts: Uint8Array[] = []
@@ -47,6 +47,18 @@ describe('zip writer', () => {
     })
     // Deflate actually compresses the repetitive FEC.
     expect(archive.length).toBeLessThan(big.length / 10)
+  })
+
+  it('stores entries marked store as they are (photos, PDFs), next to deflated ones', async () => {
+    const photo = new Uint8Array(4096).map((_, i) => (i * 7919) % 251)
+    const archive = await collect(zipStream([{ name: 'justificatifs/ticket.jpg', data: photo, store: true }, { name: 'a.txt', data: 'a'.repeat(1000) }]))
+    const entries = unzipEntries(archive)
+    expect(entries['justificatifs/ticket.jpg'].method).toBe(0)
+    expect([...entries['justificatifs/ticket.jpg'].bytes]).toEqual([...photo])
+    expect(entries['a.txt'].method).toBe(8)
+    // Local header: version needed 1.0 and method 0 for the stored entry.
+    const view = new DataView(archive.buffer, archive.byteOffset)
+    expect([view.getUint16(4, true), view.getUint16(8, true)]).toEqual([10, 0])
   })
 
   it('never writes a path that leaves the archive folder', async () => {

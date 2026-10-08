@@ -29,7 +29,7 @@ export function DataSettings({ companies, deletion, email }: { companies: Export
             <h2>Exporter vos données</h2>
           </CardTitle>
           <CardDescription>
-            Une archive par société&nbsp;: le FEC de chaque exercice et toutes les données au format JSON. Disponible à tout moment, même en lecture seule.
+            Une archive par société&nbsp;: le FEC de chaque exercice, toutes les données au format JSON et vos justificatifs, avec un manifeste qui relie chacun à sa transaction ou à sa note de frais. Disponible à tout moment, même en lecture seule.
           </CardDescription>
         </CardHeader>
         <CardContent>
