@@ -481,6 +481,8 @@ const ROUTE_MODULES = {
   openingBalances: () => import('@/app/api/companies/[id]/opening-balances/route'),
   member: () => import('@/app/api/companies/[id]/members/[memberId]/route'),
   fec: () => import('@/app/api/fec/route'),
+  // Kledg Cloud (docs/cloud.md): full export of a company
+  cloudExport: () => import('@/app/api/cloud/export/route'),
   balanceSheetPdf: () => import('@/app/api/companies/[id]/balance-sheet/export-pdf/route'),
   bankConnections: () => import('@/app/api/banking/connections/route'),
   bankAccounts: () => import('@/app/api/banking/accounts/route'),
@@ -1087,6 +1089,14 @@ const READS_LET_THROUGH: Call[] = [
   { label: 'list Qonto receipts of a transaction', route: 'qontoTransactionAttachments', method: 'GET', path: () => `/api/qonto/transactions/${ids.aTransaction}/attachments?companyId=${A()}`, params: p({ id: () => ids.aTransaction }) },
 ]
 
+/**
+ * Kledg Cloud routes of company A (docs/cloud.md), called in cloud mode
+ * (they answer 404 outside it). The full export is the data controller's
+ * copy: company administrators only (settings:update), viewer and
+ * accountant refused, non-member 404, anonymous 401.
+ */
+const CLOUD_ADMIN_READS: Call[] = [{ label: 'full export of the company', route: 'cloudExport', method: 'GET', path: () => `/api/cloud/export?companyId=${A()}` }]
+
 /** The user's own dashboard of company A: every member, a viewer included (a preference); non-member 404, anonymous 401. */
 const OWN_PREFERENCES: Call[] = [
   { label: 'save own dashboard layout', route: 'dashboardLayout', method: 'PUT', path: () => `/api/dashboard/layout?companyId=${A()}`, body: () => ({ items: [] }) },
@@ -1564,6 +1574,26 @@ describe.skipIf(!available)('authorization matrix', () => {
       } finally {
         await prisma.expenseClaimant.update({ where: { id: own.id }, data: { userId: 'u-viewer' } })
       }
+    })
+  })
+
+  describe('Kledg Cloud routes, in cloud mode', () => {
+    beforeAll(async () => {
+      vi.stubEnv('KLEDG_CLOUD_MODE', 'true')
+      await reseed()
+    })
+    afterAll(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it.each(CLOUD_ADMIN_READS.map((c) => [c.label, c] as const))('%s: anonymous 401, viewer and accountant 403, member of B 404, company admin 200', async (_label, c) => {
+      expect((await call('anonymous', c)).status).toBe(401)
+      expect((await call('viewer', c)).status).toBe(403)
+      expect((await call('accountant', c)).status).toBe(403)
+      expect((await call('memberB', c)).status).toBe(404)
+      const response = await call('companyAdmin', c)
+      expect(response.status).toBe(200)
+      await response.arrayBuffer()
     })
   })
 

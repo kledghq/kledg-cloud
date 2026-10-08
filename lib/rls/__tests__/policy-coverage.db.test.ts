@@ -40,6 +40,8 @@ const OPTIONAL_COMPANY_TABLES: Readonly<Record<string, string>> = {
   mcp_pending_actions: 'company and user',
   ai_access_grant_companies: 'grant companies',
   organization: 'membership',
+  // Kledg Cloud (docs/cloud.md, migration 20261123110000_cloud_billing_guards): read for reachable companies, written only by unrestricted contexts
+  cloud_company_ownerships: 'company, written by the system',
 }
 
 /** The rule of a company scoped table, as PostgreSQL prints it (whitespace normalized). */
