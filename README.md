@@ -27,9 +27,9 @@ Et votre assistant IA peut y travailler : chaque instance expose un **serveur MC
 
 Le plus simple : [le déploiement guidé de kledg.com](https://www.kledg.com/fr/deploy). Il prépare le compte Vercel, génère le secret dans votre navigateur, vous accompagne écran par écran et donne à la fin le lien qui crée le compte administrateur. Le bouton ci-dessous fait la même chose, sans guide :
 
-[![Déployer sur Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkledghq%2Fkledg&project-name=kledg&repository-name=kledg&env=BETTER_AUTH_SECRET%2CADMIN_EMAIL&envDescription=BETTER_AUTH_SECRET%20%3A%20un%20secret%20al%C3%A9atoire%20%28bouton%20G%C3%A9n%C3%A9rer%20sur%20la%20page%20li%C3%A9e%29.%20ADMIN_EMAIL%20%3A%20votre%20email%2C%20qui%20recevra%20le%20lien%20de%20cr%C3%A9ation%20du%20compte%20administrateur.&envLink=https%3A%2F%2Fwww.kledg.com%2Ffr%2Fdocs%2Finstaller-kledg%23d%C3%A9ployer-sur-vercel&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22neon%22%2C%22productSlug%22%3A%22neon%22%2C%22protocol%22%3A%22storage%22%7D%5D&demo-title=Kledg&demo-description=La%20comptabilit%C3%A9%20fran%C3%A7aise%20open%20source%20de%20votre%20soci%C3%A9t%C3%A9%2C%20avec%20un%20serveur%20MCP%20pour%20Claude%20et%20ChatGPT.&demo-url=https%3A%2F%2Fdemo.kledg.com&demo-image=https%3A%2F%2Fwww.kledg.com%2Ffr%2Fopengraph-image&redirect-url=https%3A%2F%2Fwww.kledg.com%2Ffr%2Fwelcome)
+[![Déployer sur Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkledghq%2Fkledg&project-name=kledg&repository-name=kledg&env=BETTER_AUTH_SECRET%2CADMIN_EMAIL&envDescription=BETTER_AUTH_SECRET%20%3A%20un%20secret%20al%C3%A9atoire%20%28bouton%20G%C3%A9n%C3%A9rer%20sur%20la%20page%20li%C3%A9e%29.%20ADMIN_EMAIL%20%3A%20votre%20email%2C%20qui%20recevra%20le%20lien%20de%20cr%C3%A9ation%20du%20compte%20administrateur.&envLink=https%3A%2F%2Fwww.kledg.com%2Ffr%2Fdocs%2Finstaller-kledg%23d%C3%A9ployer-sur-vercel&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22neon%22%2C%22productSlug%22%3A%22neon%22%2C%22protocol%22%3A%22storage%22%7D%2C%7B%22type%22%3A%22blob%22%2C%22access%22%3A%22private%22%7D%5D&demo-title=Kledg&demo-description=La%20comptabilit%C3%A9%20fran%C3%A7aise%20open%20source%20de%20votre%20soci%C3%A9t%C3%A9%2C%20avec%20un%20serveur%20MCP%20pour%20Claude%20et%20ChatGPT.&demo-url=https%3A%2F%2Fdemo.kledg.com&demo-image=https%3A%2F%2Fwww.kledg.com%2Ffr%2Fopengraph-image&redirect-url=https%3A%2F%2Fwww.kledg.com%2Ffr%2Fwelcome)
 
-Le bouton crée le projet Vercel, provisionne une base **Neon** et ne demande que `BETTER_AUTH_SECRET` et `ADMIN_EMAIL`. Au premier déploiement, les migrations s'appliquent automatiquement ; ouvrez ensuite le lien d'installation `/setup?token=…` que donne le guide de déploiement de kledg.com : il crée le compte administrateur.
+Le bouton crée le projet Vercel, provisionne une base **Neon** et un magasin **Vercel Blob** privé pour les fichiers des justificatifs, et ne demande que `BETTER_AUTH_SECRET` et `ADMIN_EMAIL`. Au premier déploiement, les migrations s'appliquent automatiquement ; ouvrez ensuite le lien d'installation `/setup?token=…` que donne le guide de déploiement de kledg.com : il crée le compte administrateur.
 
 ### Autres hébergeurs
 
@@ -91,6 +91,13 @@ Ouvrez http://localhost:3000 : vous arrivez sur `/setup`. Sans `RESEND_API_KEY`,
 | `pnpm lint` | ESLint |
 | `pnpm db:migrate:dev` | Créer une migration après modification de `prisma/schema.prisma` |
 | `pnpm db:studio` | Explorer la base |
+
+## Documentation
+
+- **Guides d'utilisation** : sur le site, [www.kledg.com/fr/docs](https://www.kledg.com/fr/docs). Installer, créer sa société, connecter sa banque, rapprocher, déclarer la TVA et l'IS, clôturer : chaque fonctionnalité expliquée au dirigeant et à l'expert-comptable, avec les règles de droit qui s'appliquent.
+- **Documentation technique** : dans ce dépôt, [docs/](docs/README.md). Architecture, conventions, sécurité (RLS), configuration, auto-hébergement, serveur MCP, points d'extension, et le fonctionnement technique de chaque fonctionnalité (code, API, règles de calcul, droits).
+
+Une modification qui change ce que voit l'utilisateur met à jour le guide du site ; une modification du code met à jour la page technique de `docs/`.
 
 ## Avertissement
 

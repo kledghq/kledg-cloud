@@ -32,6 +32,8 @@ export const RATE_LIMITS = {
   'member-invitation': { window: 3600, max: 20, message: "Trop d'invitations envoyées en une heure. Réessayez plus tard." },
   /** Invitation emails received by one address, every company together, per address. */
   'invitation-email': { window: 86_400, max: 5, message: "Trop d'invitations envoyées à cette adresse aujourd'hui. Réessayez demain." },
+  /** Members removed from a company, or companies left (lib/rbac/remove-member.service.ts), per user acting. */
+  'member-removal': { window: 3600, max: 30, message: 'Trop de membres retirés en une heure. Réessayez plus tard.' },
   /** Acceptance attempts on the invitation page (app/(auth)/invitation), per client IP. */
   'invitation-accept': { window: 900, max: 20, message: 'Trop de tentatives. Réessayez dans quelques minutes.' },
   /** Test email of the Configuration page, per administrator. */
@@ -60,6 +62,8 @@ export const RATE_LIMITS = {
   'updates-write': { window: 60, max: 10, message: 'Trop de requêtes vers GitHub. Patientez une minute.' },
   /** File imports parsed on the server (FEC, CSV, Excel, bank statements), per user. */
   import: { window: 600, max: 30, message: "Trop d'imports en peu de temps. Patientez quelques minutes avant de réessayer." },
+  /** Receipts staged from an assistant or the Justificatifs page (lib/receipts/stage-receipt.service.ts), per user. */
+  'receipt-upload': { window: 600, max: 60, message: 'Trop de justificatifs déposés en peu de temps. Patientez quelques minutes avant de réessayer.' },
   /** Generated documents (FEC, PDF and Excel exports), per user. */
   export: { window: 60, max: 30, message: "Trop d'exports en une minute. Patientez une minute avant de réessayer." },
   /** MCP calls authenticated with an API key, per key (lib/mcp/api-key.ts): assistants make many calls per conversation. */

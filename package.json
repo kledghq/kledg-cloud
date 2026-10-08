@@ -1,6 +1,6 @@
 {
   "name": "kledg",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "description": "Open-source accounting for French companies (PCG 2026), self-hosted on Vercel and Neon.",
   "license": "AGPL-3.0-only",
@@ -34,7 +34,8 @@
     "check:pcg-compliance": "tsx scripts/check-pcg-compliance.ts",
     "check:pcg-accounts": "tsx scripts/check-pcg-account-compliance.ts",
     "generate:secret": "node scripts/generate-encryption-key.js",
-    "secrets:reencrypt": "tsx scripts/reencrypt-secrets.ts"
+    "secrets:reencrypt": "tsx scripts/reencrypt-secrets.ts",
+    "receipts:migrate-storage": "tsx scripts/migrate-receipt-storage.ts"
   },
   "dependencies": {
     "@better-auth/api-key": "^1.7.7",
@@ -70,7 +71,9 @@
     "@react-pdf/renderer": "^4.5.1",
     "@tanstack/react-table": "^8.21.3",
     "@vercel/analytics": "^2.0.1",
+    "@vercel/blob": "~2.8.0",
     "@vercel/functions": "^3.9.11",
+    "aws4fetch": "^1.0.20",
     "better-auth": "^1.7.7",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

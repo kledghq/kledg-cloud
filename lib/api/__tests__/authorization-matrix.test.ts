@@ -480,6 +480,7 @@ const ROUTE_MODULES = {
   onboarding: () => import('@/app/api/companies/[id]/onboarding/route'),
   openingBalances: () => import('@/app/api/companies/[id]/opening-balances/route'),
   member: () => import('@/app/api/companies/[id]/members/[memberId]/route'),
+  membership: () => import('@/app/api/companies/[id]/membership/route'),
   fec: () => import('@/app/api/fec/route'),
   // Kledg Cloud (docs/cloud.md): full export of a company
   cloudExport: () => import('@/app/api/cloud/export/route'),
@@ -564,6 +565,11 @@ const ROUTE_MODULES = {
   simpleConfirm: () => import('@/app/api/simple/expenses/[id]/confirm/route'),
   simpleConfirmAll: () => import('@/app/api/simple/expenses/confirm-all/route'),
   simpleReceipt: () => import('@/app/api/simple/expenses/[id]/receipt/route'),
+  stagedReceipts: () => import('@/app/api/receipts/staged/route'),
+  stagedReceipt: () => import('@/app/api/receipts/staged/[id]/route'),
+  stagedReceiptMatch: () => import('@/app/api/receipts/staged/[id]/match/route'),
+  stagedReceiptAttach: () => import('@/app/api/receipts/staged/[id]/attach/route'),
+  stagedReceiptExpense: () => import('@/app/api/receipts/staged/[id]/expense/route'),
   simpleEntries: () => import('@/app/api/simple/entries/route'),
   simpleSettings: () => import('@/app/api/companies/[id]/simple-mode-settings/route'),
   subscriptionDecision: () => import('@/app/api/subscriptions/decision/route'),
@@ -1104,6 +1110,9 @@ const OWN_PREFERENCES: Call[] = [
   { label: 'save own sidebar menu', route: 'sidebarPreferences', method: 'PUT', path: () => `/api/companies/${A()}/sidebar-preferences`, params: p({ id: A }), body: () => ({ hiddenItems: [], hiddenGroups: [] }) },
 ]
 
+/** The signed-in user leaves company A (any member; tested on its own, it ends the membership). */
+const LEAVE_COMPANY: Call = { label: 'leave company', route: 'membership', method: 'DELETE', path: () => `/api/companies/${A()}/membership`, params: p({ id: A }) }
+
 /** What the accountant must not do. */
 const ACCOUNTANT_FORBIDDEN = new Set([
   'delete company',
@@ -1401,6 +1410,18 @@ describe.skipIf(!available)('authorization matrix', () => {
       expect((await call('companyAdmin', WRITES.find((c) => c.label === 'change member role')!)).status).toBe(403)
     })
 
+    it('removes a member of the company, never one of company B, and never leaves it without an administrator', async () => {
+      await reseed()
+      expect((await call('companyAdmin', WRITES.find((c) => c.label === 'remove member')!)).status).toBe(200)
+      expect(await prisma.member.count({ where: { id: 'm-u-viewer' } })).toBe(0)
+      // Company B's member through company A's URL: not found
+      const foreign: Call = { label: 'remove foreign member', route: 'member', method: 'DELETE', path: () => `/api/companies/${A()}/members/m-u-member-b`, params: p({ id: A, memberId: () => 'm-u-member-b' }) }
+      expect((await call('companyAdmin', foreign)).status).toBe(404)
+      expect(await prisma.member.count({ where: { id: 'm-u-member-b' } })).toBe(1)
+      // The only company administrator cannot leave
+      expect((await call('companyAdmin', LEAVE_COMPANY)).status).toBe(409)
+    })
+
     it('invites members by email and manages the invitations (issue #13)', async () => {
       for (const label of ['list invitations', 'invite member', 'resend invitation', 'revoke invitation']) {
         await reseed()
@@ -1597,6 +1618,75 @@ describe.skipIf(!available)('authorization matrix', () => {
     })
   })
 
+  describe('receipts photographed or dropped (expenses:submit, every role; attach banking:reconcile)', () => {
+    /** A staged receipt of company `prefix` uploaded by `userId`, with its stored file. */
+    async function stagedReceipt(prefix: 'a' | 'b', userId: string, seed: string): Promise<string> {
+      const companyId = ids[`${prefix}Company`]
+      const sha256 = Buffer.from(seed.padEnd(32, '0')).toString('hex').slice(0, 64)
+      const file = await prisma.receiptFile.create({ data: { companyId, sha256, contentType: 'image/jpeg', size: 4, content: Buffer.from([0xff, 0xd8, 0xff, 0xe0]) } })
+      const row = await prisma.stagedReceipt.create({ data: { companyId, fileId: file.id, sha256, fileName: `${seed}.jpg`, contentType: 'image/jpeg', size: 4, source: 'app', uploadedById: userId, expiresAt: new Date(Date.now() + 86_400_000) } })
+      return row.id
+    }
+
+    beforeAll(async () => {
+      await reseed()
+      // A bank without receipt API: an attached receipt stays in Kledg (no Qonto call)
+      await prisma.bankConnection.updateMany({ where: { companyId: { in: [ids.aCompany, ids.bCompany] } }, data: { provider: 'MANUAL' } })
+      ids.aViewerReceipt = await stagedReceipt('a', 'u-viewer', 'viewer-one')
+      ids.aViewerReceipt2 = await stagedReceipt('a', 'u-viewer', 'viewer-two')
+      ids.aAccountantReceipt = await stagedReceipt('a', 'u-accountant', 'accountant')
+      ids.bReceipt = await stagedReceipt('b', 'u-member-b', 'member-b')
+    })
+
+    const at = (id: () => string, suffix = '') => ({ path: () => `/api/receipts/staged/${id()}${suffix}`, params: p({ id }) })
+    const FIELDS = { fields: { amountCents: 4_350, date: '2026-03-10', merchant: 'Boulangerie du Marché', paymentHint: 'personal_card' } }
+    const matchOf = (id: () => string): Call => ({ label: 'match a staged receipt', route: 'stagedReceiptMatch', method: 'POST', ...at(id, '/match'), body: () => FIELDS })
+    const attachOf = (id: () => string): Call => ({ label: 'attach a staged receipt', route: 'stagedReceiptAttach', method: 'POST', ...at(id, '/attach'), body: () => ({ transactionId: ids.aTransaction }) })
+    const RECEIPTS: Call[] = [
+      { label: 'list own staged receipts', route: 'stagedReceipts', method: 'GET', path: () => `/api/receipts/staged?companyId=${A()}` },
+      { label: 'stage a receipt', route: 'stagedReceipts', method: 'POST', path: () => '/api/receipts/staged', form: () => ({ companyId: A(), note: 'sans fichier' }) },
+      matchOf(() => ids.aViewerReceipt),
+      attachOf(() => ids.aViewerReceipt),
+      { label: 'expense report from a staged receipt', route: 'stagedReceiptExpense', method: 'POST', ...at(() => ids.aViewerReceipt, '/expense'), body: () => ({}) },
+      { label: 'discard a staged receipt', route: 'stagedReceipt', method: 'DELETE', ...at(() => ids.aViewerReceipt2) },
+    ]
+    const [list, stage, match, attach, expense, discard] = RECEIPTS
+
+    it.each(RECEIPTS.map((c) => [c.label, c] as const))('%s: anonymous 401, member of B 404', async (_label, c) => {
+      expect((await call('anonymous', c)).status).toBe(401)
+      expect((await call('memberB', c)).status).toBe(404)
+    })
+
+    it('a viewer stages, matches, prepares the expense report and discards their own receipts, never attaches one', async () => {
+      expect((await call('viewer', list)).status).toBe(200)
+      // No file: the 400 of the service, after the right was checked
+      expect((await call('viewer', stage)).status).toBe(400)
+      const matched = await call('viewer', match)
+      expect(matched.status).toBe(200)
+      expect(((await matched.json()) as { outcome: string }).outcome).toBe('none')
+      expect((await call('viewer', attach)).status).toBe(403)
+      expect(await prisma.attachment.count({ where: { bankTransactionId: ids.aTransaction } })).toBe(0)
+      const created = await call('viewer', expense)
+      expect(created.status, await created.clone().text()).toBe(201)
+      const report = await prisma.expenseReport.findUniqueOrThrow({ where: { id: ((await created.json()) as { reportId: string }).reportId }, include: { claimant: true } })
+      expect([report.status, report.claimant.userId]).toEqual(['DRAFT', 'u-viewer'])
+      expect((await call('viewer', discard)).status).toBe(200)
+      expect((await prisma.stagedReceipt.findUniqueOrThrow({ where: { id: ids.aViewerReceipt2 } })).status).toBe('discarded')
+    })
+
+    it("a viewer never reaches another member's receipt nor another company's; an accountant files it", async () => {
+      expect((await call('viewer', matchOf(() => ids.aAccountantReceipt))).status).toBe(404)
+      expect((await call('viewer', matchOf(() => ids.bReceipt))).status).toBe(404)
+      const attachOther = attachOf(() => ids.aAccountantReceipt)
+      expect((await call('accountant', attachOther)).status).toBe(200)
+      const attachment = await prisma.attachment.findFirstOrThrow({ where: { bankTransactionId: ids.aTransaction } })
+      expect(attachment.receiptFileId).not.toBeNull()
+      // Retried: nothing more
+      expect((await call('accountant', attachOther)).status).toBe(200)
+      expect(await prisma.attachment.count({ where: { bankTransactionId: ids.aTransaction } })).toBe(1)
+    })
+  })
+
   describe('reads let through and own preferences (KLEDG-R3-AUTHZ-06)', () => {
     beforeAll(reseed)
     it.each([...READS_LET_THROUGH, ...OWN_PREFERENCES].map((c) => [c.label, c] as const))('%s: anonymous 401, member of B 404', async (_label, c) => {
@@ -1623,11 +1713,22 @@ describe.skipIf(!available)('authorization matrix', () => {
     })
   })
 
+  describe('leaving a company (any member, never the last administrator)', () => {
+    beforeAll(reseed)
+    it('anonymous 401, member of B 404, the viewer leaves', async () => {
+      expect((await call('anonymous', LEAVE_COMPANY)).status).toBe(401)
+      expect((await call('memberB', LEAVE_COMPANY)).status).toBe(404)
+      expect((await call('viewer', LEAVE_COMPANY)).status).toBe(200)
+      expect(await prisma.member.count({ where: { id: 'm-u-viewer' } })).toBe(0)
+      expect((await call('viewer', LEAVE_COMPANY)).status).toBe(404)
+    })
+  })
+
   describe('member of company B', () => {
     beforeAll(reseed)
     it.each([...WRITES, ...READS].map((c) => [c.label, c] as const))('%s on company A: 404', async (_label, c) => {
-      // Member routes and company deletion are reserved to instance administrators: 403 before any lookup
-      const adminOnly = (c.route === 'members' && c.method !== 'GET') || c.route === 'member' || c.label === 'delete company'
+      // Direct additions, role changes and company deletion are reserved to instance administrators: 403 before any lookup
+      const adminOnly = (c.route === 'members' && c.method !== 'GET') || (c.route === 'member' && c.method !== 'DELETE') || c.label === 'delete company'
       const expected = adminOnly ? 403 : 404
       expect((await call('memberB', c)).status).toBe(expected)
     })

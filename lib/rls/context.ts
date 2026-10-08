@@ -52,6 +52,19 @@ export type SystemReason =
    * created, lib/rbac/company-invitations.service.ts.
    */
   | 'invitation-acceptance'
+  /**
+   * Receipt files moved to the configured storage, every company's (script
+   * `pnpm receipts:migrate-storage`, or KLEDG_STORAGE_MIGRATE=on at server
+   * start), lib/receipts/migrate-receipt-storage.service.ts.
+   */
+  | 'storage-migration'
+  /**
+   * The removal of a member by a company administrator, or a member leaving,
+   * once the rules were checked: the membership, and the grants and pending
+   * AI actions of that user on the company, are rows only unrestricted
+   * contexts write, lib/rbac/remove-member.service.ts.
+   */
+  | 'member-removal'
   /** Command line scripts run by an operator (scripts/). */
   | 'script'
   /** Instance extensions of a fork (docs/extension-points.md), e.g. the demo's throwaway companies. */
