@@ -19,7 +19,7 @@ import { ClosedFiscalYearError, ConflictError, NotFoundError, ValidationError } 
 import { createValidatedEntry, ensureAccounts, ensureJournal } from '@/lib/accounting/fiscal-year-closure/ledger'
 import { lockFiscalYearRow } from '@/lib/accounting/fiscal-year-closure/lock'
 import { centsToDecimal, fromCents, sumCents, toCents } from '@/lib/utils/money'
-import { buildDepreciationPlan, sumPlanCentsForPeriod } from './depreciation-plan'
+import { buildDepreciationPlan, closingMonthOf, sumPlanCentsForPeriod } from './depreciation-plan'
 import { FIXED_ASSET_NOT_FOUND } from './read-fixed-assets.service'
 import type { SaveDepreciationRecordInput } from './schemas'
 
@@ -104,6 +104,9 @@ export async function saveDepreciationRecord(
       depreciationDuration: fixedAsset.depreciationDuration,
       decliningCoefficient: fixedAsset.decliningCoefficient,
       depreciationStartDate: new Date(fixedAsset.depreciationStartDate),
+      openingDepreciation: fixedAsset.openingDepreciation,
+      openingDepreciationDate: fixedAsset.openingDepreciationDate,
+      fiscalYearClosingMonth: closingMonthOf(fiscalYear.endDate),
     })
     amountCents = sumPlanCentsForPeriod(plan, period.start, period.end)
   }

@@ -20,7 +20,7 @@ import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { NotFoundError } from '@/lib/accounting/errors'
 import { fromCents, sumCents, toCents } from '@/lib/utils/money'
-import { buildDepreciationPlan, sumPlanCentsForPeriod } from './depreciation-plan'
+import { buildDepreciationPlan, closingMonthOf, sumPlanCentsForPeriod } from './depreciation-plan'
 import { FIXED_ASSET_NOT_FOUND } from './read-fixed-assets.service'
 
 const LINKED_ENTRY_SELECT = { id: true, entryNumber: true, date: true } as const
@@ -135,6 +135,9 @@ export function buildDepreciationStatus({ fixedAsset, fiscalYears, records, now 
     depreciationDuration: fixedAsset.depreciationDuration,
     decliningCoefficient: fixedAsset.decliningCoefficient,
     depreciationStartDate: new Date(fixedAsset.depreciationStartDate),
+    openingDepreciation: fixedAsset.openingDepreciation,
+    openingDepreciationDate: fixedAsset.openingDepreciationDate,
+    fiscalYearClosingMonth: closingMonthOf(fiscalYears[fiscalYears.length - 1]?.endDate),
   })
   // Suggestions are kept in cents until the response.
   const suggestedCents = (from: Date, to: Date) => sumPlanCentsForPeriod(plan, from, to)

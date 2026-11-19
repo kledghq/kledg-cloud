@@ -24,6 +24,7 @@
 
 import { afterAll, describe, expect, it } from 'vitest'
 import {
+  ACOMPTE_REFERENCE_NOT_FOLLOWED_NOTE,
   approvalDeadlineOf,
   filingDeadlineOf,
   addMonthsEom,
@@ -249,6 +250,32 @@ describe('IS acomptes (CGI art. 1668, 1; BOI-IS-DECLA-20-10)', () => {
 
   it('drops the acomptes when the IS of reference is 3 000 € or less', () => {
     expect(ofRule(run({ settings: { isAcomptes: false } }), 'is-acompte')).toEqual([])
+  })
+
+  it('tells on the earliest exercice in Kledg that its acomptes rest on an IS Kledg does not hold, and how to mark them not due', () => {
+    const alone = ofRule(run({ fiscalYears: [fy('2026-01-01', '2026-12-31')] }), 'is-acompte')
+    expect(alone).toHaveLength(4)
+    expect(alone.every((d) => d.note === ACOMPTE_REFERENCE_NOT_FOLLOWED_NOTE)).toBe(true)
+    expect(alone[0].note).toMatch(/non dû/)
+    // With the previous exercice in Kledg, the tracker reads its filed return instead (lib/declarations)
+    const followed = ofRule(run(), 'is-acompte')
+    expect(followed).toHaveLength(4)
+    expect(followed.every((d) => d.note === undefined)).toBe(true)
+  })
+})
+
+describe('equity below half the share capital (C. com. L223-42, L225-248)', () => {
+  const approvals = (over: Record<string, unknown> = {}) => ({ 'fy-2025-12-31': { approvedOn: '2026-06-20', filedOn: null, equityBelowHalfCapital: true, ...over } })
+
+  it('adds the dissolution decision four months after the approval and the restoration three years after the close', () => {
+    const deadlines = run({ approvals: approvals(), to: '2028-12-31' })
+    expect(byId(deadlines, 'capitaux-propres-decision:2025-12-31')).toMatchObject({ legalDate: '2026-10-20', category: 'juridique' })
+    expect(byId(deadlines, 'capitaux-propres-reconstitution:2025-12-31')).toMatchObject({ legalDate: '2028-12-31', condition: 'Sauf dissolution décidée par les associés.' })
+  })
+
+  it('adds nothing without the alert or before the approval is recorded', () => {
+    expect(ofRule(run({ approvals: approvals({ equityBelowHalfCapital: false }), to: '2028-12-31' }), 'capitaux-propres-decision')).toEqual([])
+    expect(ofRule(run({ approvals: approvals({ approvedOn: null }), to: '2028-12-31' }), 'capitaux-propres-reconstitution')).toEqual([])
   })
 })
 

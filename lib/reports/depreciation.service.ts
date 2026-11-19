@@ -13,7 +13,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
-import { buildDepreciationPlan, sumPlanCentsForPeriod } from '@/lib/fixed-assets/depreciation-plan'
+import { buildDepreciationPlan, closingMonthOf, sumPlanCentsForPeriod } from '@/lib/fixed-assets/depreciation-plan'
 import { addUtcDays, isoDateToUtc } from '@/lib/utils/date'
 import { todayParis } from '@/lib/accounting/entry-date'
 import { fromCents, parseCents } from '@/lib/utils/money'
@@ -110,6 +110,9 @@ export async function calculateDepreciationTable(
       depreciationDuration: asset.depreciationDuration,
       decliningCoefficient: asset.decliningCoefficient,
       depreciationStartDate: asset.depreciationStartDate,
+      openingDepreciation: asset.openingDepreciation,
+      openingDepreciationDate: asset.openingDepreciationDate,
+      fiscalYearClosingMonth: closingMonthOf(fiscalYear?.endDate),
     })
 
     let previousCents: number

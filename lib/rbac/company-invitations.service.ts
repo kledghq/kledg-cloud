@@ -17,9 +17,14 @@
  *   conditional update), and sending it again replaces the token;
  * - at most one open invitation per company and address (advisory lock);
  * - only the account of the invited address accepts: signed in with that
- *   address (confirmed), or created from the link (the link proves the
- *   mailbox; an unconfirmed account of that address is reset first, like
- *   KLEDG-SEC-011);
+ *   address (confirmed), or created from the link (an emailed link proves
+ *   the mailbox; an unconfirmed account of that address is reset first, like
+ *   KLEDG-SEC-011). A link the inviter got back instead of an email proves
+ *   nothing: it never resets an account, and an account created from it
+ *   stays unconfirmed;
+ * - the inviter must still be allowed to send the invitation when it is
+ *   accepted (not banned, not deleted, still managing the members of the
+ *   company with every right of the role, or an instance administrator);
  * - a read-only company (archived, or refused writes by the instance
  *   policy) neither sends nor accepts invitations;
  * - sends are rate limited per inviter and per invited address, acceptance
@@ -45,12 +50,12 @@ import { enforceRateLimit } from '@/lib/rate-limit'
 import { withSystemContext } from '@/lib/rls/context'
 import { ROLE_LABELS } from '@/lib/permissions'
 import { grantedPermissions, grants } from '@/lib/rbac/granted-permissions'
-import type { Permission } from '@/lib/rbac/authorize'
+import { getUserRolesForCompany, isGlobalAdmin, rolesGrant, type Permission } from '@/lib/rbac/authorize'
 import { assertCompanyWritable } from '@/lib/companies/archive-company.service'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/lib/accounting/errors'
 import { COMPANY_ROLES, resetUnconfirmedAccount, type CompanyRoleName } from './add-member-to-company.service'
 import { ensureCompanyOrganization } from './ensure-company-organization.service'
-import { formatDateShort } from '@/lib/utils/date'
+import { invitationExpiresOn } from '@/lib/rbac/invitation-expiry'
 import { inAmbientTransaction, runAfterCommit } from '@/lib/approved-state/ambient'
 
 /** Days an invitation link stays valid. */
@@ -72,6 +77,8 @@ export const WRONG_ACCOUNT_MESSAGE =
   "Cette invitation est adressée à une autre adresse email : connectez-vous avec le compte de cette adresse pour l'accepter."
 export const ACCOUNT_EXISTS_MESSAGE =
   "Un compte existe déjà pour cette adresse : connectez-vous pour accepter l'invitation."
+export const INVITER_NO_LONGER_ALLOWED_MESSAGE =
+  "Cette invitation n'est plus valable\u00a0: la personne qui l'a envoyée ne peut plus inviter dans cette société. Demandez à un administrateur de la société de vous inviter de nouveau."
 export const SIGN_UP_REFUSED_MESSAGE =
   "Sur cette instance, votre compte doit d'abord être créé par l'administrateur de l'instance. Une fois votre compte créé, rouvrez ce lien pour accepter l'invitation."
 
@@ -196,7 +203,7 @@ async function sendInvitationEmail(
         companyName: company?.name ?? 'la société',
         inviterName: inviter.name?.trim() || inviter.email,
         roleLabel: ROLE_LABELS[invitation.role] ?? invitation.role,
-        expiresOn: formatDateShort(invitation.expiresAt),
+        expiresOn: invitationExpiresOn(invitation.expiresAt),
       },
       url,
     ),
@@ -299,6 +306,7 @@ export async function inviteMember(input: InviteInput): Promise<InviteResult> {
     }
   }
 
+  await recordDelivery(created.id, delivery)
   await writeAuditLog('info', 'Invitation envoyée', {
     action: 'MEMBER_INVITED',
     companyId: input.companyId,
@@ -306,6 +314,11 @@ export async function inviteMember(input: InviteInput): Promise<InviteResult> {
   })
   const [invitation] = await summarize([created], now)
   return { invitation, ...delivery }
+}
+
+/** Whether the current link went to the mailbox or back to the inviter (acceptInvitation relies on it). */
+async function recordDelivery(invitationId: string, delivery: { emailSent: boolean }): Promise<void> {
+  await prisma.companyInvitation.update({ where: { id: invitationId }, data: { linkShared: !delivery.emailSent } })
 }
 
 async function openInvitationOf(companyId: string, invitationId: string) {
@@ -350,6 +363,7 @@ export async function resendInvitation(input: {
   const delivery = inAmbientTransaction()
     ? await deferredInvitationEmail(updated, token, input.inviter)
     : await sendInvitationEmail(updated, token, input.inviter)
+  await recordDelivery(current.id, delivery)
   await writeAuditLog('info', 'Invitation renvoyée', {
     action: 'MEMBER_INVITATION_RESENT',
     companyId: input.companyId,
@@ -379,6 +393,28 @@ export async function revokeInvitation(input: { companyId: string; invitationId:
 
 // Acceptance (the invitation page, app/(auth)/invitation/[token]).
 
+/**
+ * The inviter must still be allowed to send this invitation when it is
+ * accepted: a ban, a removal, a demotion or a deletion after the send
+ * withdraws it. Same rule as inviteMember (route permission members:manage,
+ * then assertGrantable): an instance administrator, or a member whose roles
+ * in the company manage the members and grant every right of `role`.
+ */
+async function assertInviterStillAllowed(
+  inviter: { id: string; role: string | null; banned: boolean | null; banExpires: Date | null } | null,
+  companyId: string,
+  role: string,
+  now: Date,
+): Promise<void> {
+  const banned = Boolean(inviter?.banned) && (!inviter?.banExpires || inviter.banExpires > now)
+  if (!inviter || banned) throw new ConflictError(INVITER_NO_LONGER_ALLOWED_MESSAGE)
+  if (isGlobalAdmin(inviter)) return
+  const roles = await getUserRolesForCompany(inviter.id, companyId)
+  if (!rolesGrant(roles, { members: ['manage'] }) || !grantableRoles(roles, false).includes(role as CompanyRoleName)) {
+    throw new ConflictError(INVITER_NO_LONGER_ALLOWED_MESSAGE)
+  }
+}
+
 export type InvitationState = 'open' | 'expired' | 'accepted' | 'revoked'
 
 /** What the invitation page shows about a token; null for an unknown token. */
@@ -406,7 +442,7 @@ const findByToken = (token: string) =>
   TOKEN_FORMAT.test(token)
     ? prisma.companyInvitation.findUnique({
         where: { tokenHash: hashInvitationToken(token) },
-        select: { id: true, companyId: true, email: true, role: true, invitedById: true, expiresAt: true, acceptedAt: true, revokedAt: true },
+        select: { id: true, companyId: true, email: true, role: true, invitedById: true, expiresAt: true, acceptedAt: true, revokedAt: true, linkShared: true },
       })
     : Promise.resolve(null)
 
@@ -429,7 +465,8 @@ export async function readInvitation(token: string, now: Date = new Date()): Pro
       roleLabel: ROLE_LABELS[invitation.role] ?? invitation.role,
       inviterName: inviter ? inviter.name?.trim() || inviter.email : null,
       expiresAt: invitation.expiresAt,
-      confirmedAccount: Boolean(account?.emailVerified),
+      // Sign in rather than create: a confirmed account, or any account when the link was handed over by the inviter (acceptInvitation)
+      confirmedAccount: Boolean(account?.emailVerified) || (Boolean(account) && invitation.linkShared),
       signUpAllowed,
     }
   })
@@ -437,6 +474,10 @@ export async function readInvitation(token: string, now: Date = new Date()): Pro
 
 /** Who accepts: the signed-in user, or a new account created from the link. */
 export type Acceptor = { user: InvitationActor } | { newAccount: { name: string; password: string } }
+
+/** An existing account invited with a link handed over by the inviter: only signing in to it accepts. */
+export const EXISTING_ACCOUNT_SIGN_IN_MESSAGE =
+  "Un compte existe déjà pour cette adresse\u00a0: connectez-vous avec ce compte pour accepter l'invitation."
 
 export interface AcceptResult {
   companyId: string
@@ -460,9 +501,14 @@ export async function acceptInvitation(token: string, acceptor: Acceptor, now: D
 
     // The instance may have stopped invitations since this one was sent.
     const inviter = invitation.invitedById
-      ? await prisma.user.findUnique({ where: { id: invitation.invitedById }, select: { id: true, email: true, role: true } })
+      ? await prisma.user.findUnique({
+          where: { id: invitation.invitedById },
+          select: { id: true, email: true, role: true, banned: true, banExpires: true },
+        })
       : null
-    await assertActionAllowed('invite-member', inviter)
+    await assertActionAllowed('invite-member', inviter && { id: inviter.id, email: inviter.email, role: inviter.role })
+    // ...and the inviter may have lost the right to send it.
+    await assertInviterStillAllowed(inviter, invitation.companyId, invitation.role, now)
     await assertCompanyWritable(invitation.companyId)
 
     const account = await prisma.user.findUnique({ where: { email: invitation.email }, select: { id: true, email: true, emailVerified: true } })
@@ -473,22 +519,32 @@ export async function acceptInvitation(token: string, acceptor: Acceptor, now: D
         throw new ForbiddenError(WRONG_ACCOUNT_MESSAGE)
       }
       // An unconfirmed address proves nothing about who registered it (KLEDG-SEC-011): the link's form resets it.
-      if (!account.emailVerified) throw new ConflictError("Confirmez d'abord l'adresse de votre compte, ou choisissez un mot de passe depuis ce lien.")
+      // A link the inviter passed on by hand cannot reset it, so signing in to the account is the proof then.
+      if (!account.emailVerified && !invitation.linkShared) {
+        throw new ConflictError("Confirmez d'abord l'adresse de votre compte, ou choisissez un mot de passe depuis ce lien.")
+      }
       userId = account.id
     } else {
       if (account?.emailVerified) throw new ConflictError(ACCOUNT_EXISTS_MESSAGE)
       if (!(await isActionAllowed('invitation-sign-up', null))) throw new ForbiddenError(SIGN_UP_REFUSED_MESSAGE)
       const name = acceptor.newAccount.name.trim() || invitation.email.split('@')[0]
+      if (account && invitation.linkShared) {
+        // The link went to the inviter, not to the mailbox: it proves nothing about who owns this address
+        throw new ConflictError(EXISTING_ACCOUNT_SIGN_IN_MESSAGE)
+      }
       if (account) {
-        // Registered but never confirmed: taken over like a new account, its sessions and keys gone.
+        // Registered but never confirmed, and the link came by email: taken over like a new account, its sessions and keys gone.
         await resetUnconfirmedAccount(account.id, name, acceptor.newAccount.password)
         userId = account.id
       } else {
         await auth.api.createUser({ body: { email: invitation.email, password: acceptor.newAccount.password, name, role: 'user' } })
         const created = await prisma.user.findUnique({ where: { email: invitation.email }, select: { id: true } })
         if (!created) throw new ConflictError("Le compte n'a pas pu être créé : réessayez.")
-        // The link reached this mailbox: the address is confirmed.
-        await prisma.user.update({ where: { id: created.id }, data: { emailVerified: true } })
+        // A link that reached this mailbox confirms the address. One the
+        // inviter got back and passed on proves nothing about the mailbox: the
+        // account stays unconfirmed, so adding the address to another company
+        // later resets it (addMemberToCompany, resetUnconfirmedAccount).
+        if (!invitation.linkShared) await prisma.user.update({ where: { id: created.id }, data: { emailVerified: true } })
         userId = created.id
       }
       createdUser = true

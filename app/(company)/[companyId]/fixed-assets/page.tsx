@@ -18,9 +18,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Plus, Calculator, MoreHorizontal, Package, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Calculator, LogOut, MoreHorizontal, Package, Pencil, Trash2 } from 'lucide-react'
 import { FixedAssetFormDialog, type FixedAssetFormData } from '@/components/features/fixed-assets/fixed-asset-form-dialog'
 import { DepreciationDetailDialog } from '@/components/features/fixed-assets/depreciation-detail-dialog'
+import { DisposalDialog } from '@/components/features/fixed-assets/disposal-dialog'
+import { DISPOSAL_KIND_LABELS, isDisposalKind } from '@/lib/fixed-assets/disposal'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +42,9 @@ interface FixedAsset {
   acquisitionValue: number
   amortizableAmount?: number | null
   disposalDate?: string | null
+  disposalKind?: string | null
+  disposalPrice?: number | string | null
+  disposalEntryId?: string | null
   depreciationRate: number | null
   depreciationDuration: number | null
   depreciationMethod: string
@@ -50,6 +55,8 @@ interface FixedAsset {
   expenseAccountId: string
   isActive: boolean
   isFullyPaid?: boolean
+  openingDepreciation?: number | string | null
+  openingDepreciationDate?: string | null
   assetAccount?: { code: string; label: string }
   depreciationAccount?: { code: string; label: string }
   expenseAccount?: { code: string; label: string }
@@ -153,6 +160,7 @@ export default function FixedAssetsPage() {
   >({})
   const [detailAssetId, setDetailAssetId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [disposalAssetId, setDisposalAssetId] = useState<string | null>(null)
 
   const loadDepreciationStatus = useCallback(async () => {
     if (!companyId || fixedAssets.length === 0) return
@@ -242,6 +250,14 @@ export default function FixedAssetsPage() {
     }
     await loadDepreciationStatus()
   }, [companyId, loadDepreciationStatus])
+
+  /** After an exit is recorded or cancelled: the list (status, dates) and the totals. */
+  const reloadAssets = useCallback(async () => {
+    if (!companyId) return
+    const response = await fetch(`/api/fixed-assets?companyId=${companyId}`)
+    if (response.ok) setFixedAssets(await response.json())
+    await reloadStatsAndStatus()
+  }, [companyId, reloadStatsAndStatus])
 
   const loadAssetForEdit = async (assetId: string) => {
     try {
@@ -507,9 +523,15 @@ export default function FixedAssetsPage() {
                     )}
                   </TableCell>
                   <TableCell className={STACK.status}>
-                    <StatusBadge tone={asset.isActive ? 'success' : 'neutral'}>
-                      {asset.isActive ? 'Active' : 'Inactive'}
-                    </StatusBadge>
+                    {isDisposalKind(asset.disposalKind) ? (
+                      <StatusBadge tone="neutral" title={asset.disposalDate ? `Sortie le ${asset.disposalDate.slice(0, 10).split('-').reverse().join('/')}` : undefined}>
+                        {DISPOSAL_KIND_LABELS[asset.disposalKind]}
+                      </StatusBadge>
+                    ) : (
+                      <StatusBadge tone={asset.isActive ? 'success' : 'neutral'}>
+                        {asset.isActive ? 'Active' : 'Inactive'}
+                      </StatusBadge>
+                    )}
                   </TableCell>
                   <TableCell className={cn('text-right', STACK.actions)}>
                     <div className="flex items-center justify-end gap-1">
@@ -539,6 +561,10 @@ export default function FixedAssetsPage() {
                           <DropdownMenuItem onSelect={() => void loadAssetForEdit(asset.id)}>
                             <Pencil aria-hidden />
                             Modifier
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => setDisposalAssetId(asset.id)}>
+                            <LogOut aria-hidden />
+                            {isDisposalKind(asset.disposalKind) ? 'Modifier la sortie' : 'Enregistrer la sortie'}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             variant="destructive"
@@ -594,6 +620,8 @@ export default function FixedAssetsPage() {
           depreciationAccountId: editingAsset.depreciationAccountId,
           expenseAccountId: editingAsset.expenseAccountId,
           isFullyPaid: editingAsset.isFullyPaid ?? false,
+          openingDepreciation: editingAsset.openingDepreciation != null ? Number(editingAsset.openingDepreciation) : null,
+          openingDepreciationDate: editingAsset.openingDepreciationDate ?? null,
         } : null}
         accounts={accounts}
         submitting={submitting}
@@ -614,6 +642,15 @@ export default function FixedAssetsPage() {
         confirmLabel="Supprimer l'immobilisation"
         loading={deleting}
         onConfirm={() => handleDelete()}
+      />
+
+      <DisposalDialog
+        open={disposalAssetId !== null}
+        onOpenChange={(open) => {
+          if (!open) setDisposalAssetId(null)
+        }}
+        asset={fixedAssets.find((a) => a.id === disposalAssetId) ?? null}
+        onChanged={() => void reloadAssets()}
       />
 
       <DepreciationDetailDialog

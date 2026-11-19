@@ -103,6 +103,16 @@ describe('getQontoCredentials', () => {
     expect(logger.error).toHaveBeenCalledWith('[Qonto] Integration key unreadable', expect.anything())
   })
 
+  it('says to run the re-encryption for a key still in the legacy format', async () => {
+    const { LegacySecretError } = await import('@/lib/integrations/encryption')
+    const legacy = Buffer.alloc(120, 1).toString('base64')
+    db.bankConnection.findUnique.mockResolvedValue({ login: 'legacy-org', secretKeyEncrypted: legacy })
+    await expect(getQontoCredentials(COMPANY)).rejects.toThrow(LegacySecretError)
+    db.bankConnection.findUnique.mockResolvedValue(null)
+    db.integration.findFirst.mockResolvedValue({ credentials: { login: 'acme', secretKey: legacy }, credentialsEncrypted: true })
+    await expect(getQontoCredentials(COMPANY)).rejects.toThrow(/pnpm secrets:reencrypt/)
+  })
+
   it('refuses incomplete stored credentials', async () => {
     for (const credentials of [{ login: 'acme' }, { secretKey: 's' }, { login: 42, secretKey: 's' }, null]) {
       db.integration.findFirst.mockResolvedValue({ credentials, credentialsEncrypted: false })
@@ -124,7 +134,8 @@ describe('getQontoCredentials', () => {
 })
 
 describe('listQontoTransactionAttachments', () => {
-  it('uses a Qonto uuid directly and passes the page', async () => {
+  it('takes a Qonto uuid of a transaction of the company and passes the page', async () => {
+    db.bankTransaction.findFirst.mockResolvedValue({ providerData: { id: TX_UUID } })
     stubQonto({ '/attachments': ok({ attachments: [{ id: 'qa-1' }], meta: { current_page: 2 } }) })
     expect(await listQontoTransactionAttachments(COMPANY, TX_UUID, { page: 2, per_page: 10 })).toEqual({
       attachments: [{ id: 'qa-1' }],
@@ -133,7 +144,17 @@ describe('listQontoTransactionAttachments', () => {
     expect(calls[0].pathname).toBe(`/v2/transactions/${TX_UUID}/attachments`)
     expect(calls[0].searchParams.get('page')).toBe('2')
     expect(calls[0].searchParams.get('per_page')).toBe('10')
-    expect(db.bankTransaction.findFirst).not.toHaveBeenCalled()
+    expect(db.bankTransaction.findFirst.mock.calls[0][0]?.where).toEqual({
+      bankAccount: { bankConnection: { companyId: COMPANY } },
+      OR: [{ externalTransactionId: TX_UUID }, { providerData: { path: ['id'], equals: TX_UUID } }],
+    })
+  })
+
+  it('refuses a Qonto uuid Kledg has not stored for the company, without calling Qonto', async () => {
+    db.bankTransaction.findFirst.mockResolvedValue(null)
+    stubQonto({})
+    await expect(listQontoTransactionAttachments(COMPANY, TX_UUID, {})).rejects.toThrow(new NotFoundError('Transaction introuvable'))
+    expect(calls).toEqual([])
   })
 
   it('resolves an external id through the company transaction and its Qonto uuid', async () => {

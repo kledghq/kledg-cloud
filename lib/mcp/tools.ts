@@ -44,6 +44,7 @@ import { registerFinancialIndicatorTools } from '@/lib/mcp/financial-indicator-t
 import { registerYearEndReadTools } from '@/lib/mcp/year-end-tools'
 import { registerApprovalReadTools } from '@/lib/mcp/approval-tools'
 import { registerAnnexeReadTools } from '@/lib/mcp/annexe-tools'
+import { registerLiasseReadTools } from '@/lib/mcp/liasse-tools'
 import { registerDeadlineReadTools } from '@/lib/mcp/deadline-tools'
 import { registerCashForecastTools } from '@/lib/mcp/cash-forecast-tools'
 import { registerVatReturnReadTools } from '@/lib/mcp/vat-return-tools'
@@ -55,6 +56,7 @@ import { registerBankingReadTools } from '@/lib/mcp/banking-tools'
 import { registerThirdPartyReadTools } from '@/lib/mcp/third-party-tools'
 import { registerDraftTools } from '@/lib/mcp/drafts'
 import { registerReceiptTools } from '@/lib/mcp/receipts-tools'
+import { registerFilingTools } from '@/lib/mcp/full-control/filings'
 import { auditDraftWrite } from '@/lib/mcp/drafts/define'
 import { registerLedgerReadTools } from '@/lib/mcp/ledger-read-tools'
 import { registerCompanySettingsTools } from '@/lib/mcp/company-settings-tools'
@@ -62,6 +64,7 @@ import { registerTransactionReadTools } from '@/lib/mcp/transaction-read-tools'
 import { registerExportTools } from '@/lib/mcp/export-tools'
 import { registerDocumentTools } from '@/lib/mcp/document-tools'
 import { registerCompanyLookupTools } from '@/lib/mcp/company-lookup-tools'
+import { registerFeedbackTools } from '@/lib/mcp/feedback-tools'
 import { READ_ONLY, describeTool, kledgPageUrl, writeAnnotations } from '@/lib/mcp/tool-meta'
 import { viewMeta, withView } from '@/lib/mcp/views'
 import {
@@ -125,6 +128,13 @@ const fiscalYearId = z
   .optional()
   .describe('Fiscal year id, from list_fiscal_years. Defaults to the current fiscal year.')
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format attendu : AAAA-MM-JJ')
+const updatedSince = z.iso
+  .datetime({ offset: true, error: 'Instant ISO 8601 attendu, avec son fuseau\u00a0: 2026-10-29T08:00:00Z' })
+  .optional()
+  .describe(
+    'Only the rows changed at or after this instant (ISO 8601 with Z or an offset), oldest change first. For a sync: pass the greatest updatedAt received, less a margin of a minute (a change committed meanwhile is read again, never missed); rows come again with the same id.',
+  )
+const cursor = z.string().max(200).optional().describe('nextCursor of the previous page, with the same filters.')
 
 export function registerKledgTools(server: McpServer, access: McpAccess) {
   const { user, canWrite } = access
@@ -623,7 +633,7 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
       title: 'Clients et fournisseurs',
       description: describeTool({
         summary:
-          'Lists the customers and suppliers (tiers) of a company with their auxiliary account number (FEC CompAuxNum, used by lettering and the aged balance), identifiers, default accounts and payment terms. Use the id or the auxiliary number with list_invoices and create_draft_invoice.',
+          'Lists the customers and suppliers (tiers) of a company by name with their auxiliary account number (FEC CompAuxNum, used by lettering and the aged balance), identifiers, email, address, default accounts, payment terms and updatedAt, page by page (pass nextCursor back as cursor; truncated: another page follows). With updatedSince, only the tiers changed since then (their own fields or address, not their invoices), oldest change first. Use the id or the auxiliary number with list_invoices and create_draft_invoice.',
         access: 'read',
         permission: { entries: ['read'] },
         amounts: 'none',
@@ -634,6 +644,8 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
         companyId,
         kind: z.enum(['CUSTOMER', 'SUPPLIER']).optional(),
         search: z.string().max(100).optional().describe('Part of the name, auxiliary number, SIREN or VAT number.'),
+        updatedSince,
+        cursor,
         limit: z.number().int().min(1).max(MAX_ROWS).default(100),
       }),
       annotations: readOnly,
@@ -641,10 +653,17 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
     (args) =>
       run(async () => {
         await guard.require(args.companyId, { entries: ['read'] })
-        const result = await listTiers(args.companyId, { kind: args.kind, search: args.search, limit: args.limit })
+        const result = await listTiers(args.companyId, {
+          kind: args.kind,
+          search: args.search,
+          limit: args.limit,
+          cursor: args.cursor,
+          updatedSince: args.updatedSince ? new Date(args.updatedSince) : undefined,
+        })
         return json({
           total: result.total,
           truncated: result.truncated,
+          nextCursor: result.nextCursor,
           tiers: result.tiers.map((t) => ({
             id: t.id,
             kind: t.kind,
@@ -652,11 +671,14 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
             auxiliaryAccountNumber: t.auxiliaryAccountNumber,
             siren: t.siren,
             vatNumber: t.vatNumber,
+            email: t.email,
+            address: t.address ? { street: t.address.street, street2: t.address.street2, postalCode: t.address.postalCode, city: t.address.city, country: t.address.country } : null,
             collectiveAccount: t.collectiveAccountCode,
             defaultAccount: t.defaultAccountCode,
             defaultVatRatePercent: t.defaultVatRateBp === null ? null : t.defaultVatRateBp / 100,
             paymentTerms: t.paymentTermsDays === null ? null : { days: t.paymentTermsDays, endOfMonth: t.paymentTermsEndOfMonth },
             invoiceCount: t._count.invoices,
+            updatedAt: t.updatedAt.toISOString(),
           })),
         })
       }),
@@ -668,7 +690,7 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
       title: 'Factures',
       description: describeTool({
         summary:
-          'Lists the purchase or sales invoices recorded in Kledg, newest first, with their totals, status (draft, posted, partially_paid, paid: derived from lettering and the bank payments recorded) and amount still due.',
+          'Lists the purchase or sales invoices recorded in Kledg, newest first, with their tiers (tiersId and name), currency, totals, status (draft, posted, partially_paid, paid: derived from lettering and the bank payments recorded), amount still due, lastPaymentDate (date of the latest payment recorded) and updatedAt, page by page (pass nextCursor back as cursor; truncated: another page follows). With updatedSince, only the invoices changed since then, oldest change first: a payment recorded or removed, lettering, the validation or deletion of its entry count as changes of the invoice; a change of its tiers does not (list_tiers).',
         access: 'read',
         permission: { entries: ['read'] },
         amounts: 'euros',
@@ -681,8 +703,10 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
         status: z.enum(['all', 'draft', 'posted']).default('all'),
         tiersId: z.string().optional(),
         search: z.string().max(100).optional().describe('Part of the number, label or tiers name.'),
-        from: isoDate.optional(),
-        to: isoDate.optional(),
+        from: isoDate.optional().describe('Issued on or after this day.'),
+        to: isoDate.optional().describe('Issued on or before this day.'),
+        updatedSince,
+        cursor,
         limit: z.number().int().min(1).max(MAX_ROWS).default(50),
       }),
       annotations: readOnly,
@@ -697,10 +721,13 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
           search: args.search,
           startDate: args.from,
           endDate: args.to,
+          cursor: args.cursor,
+          updatedSince: args.updatedSince ? new Date(args.updatedSince) : undefined,
           limit: args.limit,
         })
         return json({
           truncated: page.nextCursor !== null,
+          nextCursor: page.nextCursor,
           invoices: page.items.map((i) => ({
             id: i.id,
             number: i.number,
@@ -708,15 +735,19 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
             issueDate: i.issueDate,
             dueDate: i.dueDate,
             tiers: i.tiers.name,
+            tiersId: i.tiers.id,
             tiersAuxiliaryAccount: i.tiers.auxiliaryAccountNumber,
+            currency: i.currency,
             totalExclTax: fromCents(i.totalExclTaxCents),
             totalVat: fromCents(i.totalVatCents),
             totalInclTax: fromCents(i.totalInclTaxCents),
             paid: fromCents(i.paidCents),
             remaining: fromCents(i.remainingCents),
             status: i.status,
+            lastPaymentDate: i.lastPaymentDate,
             entryNumber: i.entry?.entryNumber ?? null,
             source: i.source,
+            updatedAt: i.updatedAt,
           })),
         })
       }),
@@ -796,6 +827,7 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
   registerCashForecastTools(server, guard)
   registerVatReturnReadTools(server, guard)
   registerCorporateTaxReadTools(server, access, guard)
+  registerLiasseReadTools(server, access, guard)
   registerRemunerationReadTools(server, guard)
   registerLocalTaxReadTools(server, guard)
   registerTrainingReadTools(server, guard)
@@ -805,8 +837,9 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
   registerCompanySettingsTools(server, guard)
   registerTransactionReadTools(server, guard)
   registerExportTools(server, access, guard)
-  registerDocumentTools(server, guard)
+  registerDocumentTools(server, access, guard)
   registerCompanyLookupTools(server, access)
+  registerFeedbackTools(server)
 
   // Full control (kledg:admin): validate, reconcile, import, close... Never
   // registered without it; each tool checks it again through the guard.
@@ -821,6 +854,7 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
 
   // Receipts photographed in the assistant (docs/justificatifs-photo.md): capture view, staging, filing.
   registerReceiptTools(server, access, guard)
+  registerFilingTools(server, access, guard)
 
   server.registerTool(
     'create_draft_entry',

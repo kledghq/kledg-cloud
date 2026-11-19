@@ -21,6 +21,9 @@ const asset = {
   acquisitionValue: new Prisma.Decimal('1200'),
   amortizableAmount: null,
   disposalDate: null,
+  disposalKind: null,
+  disposalPrice: null,
+  disposalEntryId: null,
   depreciationRate: null,
   depreciationDuration: 3,
   depreciationMethod: 'linear',
@@ -32,6 +35,8 @@ const asset = {
   isActive: true,
   isFullyPaid: true,
   acquisitionEntryId: null,
+  openingDepreciation: null,
+  openingDepreciationDate: null,
   createdAt: day('2025-03-15'),
   updatedAt: day('2025-03-15'),
 } satisfies DepreciationStatusInput['fixedAsset']
