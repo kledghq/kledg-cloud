@@ -105,7 +105,8 @@ describe.skipIf(!available)('read-only companies and invitations on the hosted s
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
     const accepted = await invitations.acceptInvitation(token!, { newAccount: { name: 'Eva Expert', password: 'motdepasse-solide-42' } })
     expect(accepted.createdUser).toBe(true)
-    expect(await prisma.user.findUniqueOrThrow({ where: { id: accepted.userId } })).toMatchObject({ emailVerified: true })
+    // Emails are off here, so the inviter hands the link over: it proves nothing about the mailbox and the account stays unconfirmed (Kledg KLEDG-SEC-011)
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: accepted.userId } })).toMatchObject({ emailVerified: false })
     expect((await prisma.member.findFirstOrThrow({ where: { userId: accepted.userId } })).role).toBe('accountant')
   })
 

@@ -21,7 +21,8 @@ Related docs: [architecture.md](architecture.md) (folders, principles),
 | Client code never reaches server modules | `lib/__tests__/architecture.test.ts` |
 | Allowlists stay honest | `lib/__tests__/conventions-allowlist.test.ts` |
 | Migrations immutable and additive | `scripts/check-migrations.mjs` (CI) |
-| Authorization of every route and role, no secret in responses | `lib/api/__tests__/authorization-matrix.test.ts` |
+| Every foreign key indexed | `lib/__tests__/foreign-key-indexes.db.test.ts` |
+| Authorization of every route and role, no secret in responses | `lib/api/__tests__/authorization-matrix*.test.ts` (shared cases in `lib/api/__tests__/helpers/authorization-matrix.ts`) |
 | Every route, service and MCP tool has a test | `lib/__tests__/feature-tests.test.ts` |
 
 ## Architecture
@@ -196,6 +197,8 @@ hooks/                   client hooks
   `-- kledg:allow-destructive <reason>` (checked by
   `scripts/check-migrations.mjs` in CI). Invariants that must hold for every
   code path are database triggers in a migration, not only service checks.
+  Every foreign key column gets an `@@index` starting with it: deleting a
+  parent row otherwise scans the whole referencing table once per row.
 
 ## Money
 
@@ -274,6 +277,7 @@ it must hold for every code path, by the database (trigger in a migration).
 | Definitive number given at validation, in fiscal year sequence | `validateEntryInTx` under `lockEntryNumbering` | |
 | A closed fiscal year never changes (PCG art. 1031-4) | `assertFiscalYearOpen`, `assertDateInOpenFiscalYear` | `kledg_lock_closed_year_*`, `kledg_lock_closed_fiscal_years` |
 | Entries are created through one path | `createEntryInTx` (drafts) and `validateEntryInTx` | |
+| The fiscal years of a company never overlap, closed or not, and keep their entries within their dates | `createFiscalYear`, `updateFiscalYearDates`, the FEC import (`lib/accounting/manage-fiscal-years.service.ts`) under `lockCompanyFiscalYears` | |
 | Lettering groups balance, one code sequence per account, never in a closed year (`docs/lettrage-et-tiers.md`) | `lib/lettering/lettering.service.ts` under an advisory lock per account | the triggers leave `letteringCode` and `letteringDate` free on validated lines |
 | An invoice posts once, to the fiscal year containing its date only, with accounts of that year's chart; its amounts come from its lines in cents (`docs/factures-et-tiers.md`) | `lib/invoices/post-invoice.service.ts` under the invoice row lock, `lib/invoices/amounts.ts` | check constraints on `invoices` (TTC = HT + TVA), `invoice_payments.entryLineId` unique |
 
@@ -330,6 +334,12 @@ it must hold for every code path, by the database (trigger in a migration).
   only through `loadWorkbook` and `readSheetRows` (`lib/api/xlsx.ts`): they
   bound cells, rows, columns and time, and never let ExcelJS expand a range
   cell by cell; never `row.values` or `eachRow({ includeEmpty: true })`.
+  Parse an uploaded CSV only after `assertCsvWithinLimits` (rows and
+  `MAX_CSV_CELLS`, counted on the text): Papa Parse builds every row in
+  memory at once. A FEC is bounded by its parser on every path (import,
+  preview, MCP): `MAX_FEC_LINES` counted on the text, the first
+  `MAX_FEC_PARSE_ERRORS` unreadable lines kept with their count,
+  `MAX_FEC_FISCAL_YEARS` per file (`lib/import/fec/parser.ts`, `plan.ts`).
 - **Rate limits** (tested by `lib/__tests__/rate-limit.test.ts`): every
   limit of Kledg's own code is a named rule of `RATE_LIMITS` in
   `lib/rate-limit.ts` (window, maximum, French message), applied with
@@ -342,7 +352,7 @@ it must hold for every code path, by the database (trigger in a migration).
   | Sign-in, password reset, account creation, OAuth registration and tokens | `authRateLimit` (`lib/auth-policy.ts`) | client IP |
   | API keys (MCP), 300 calls per minute | `mcp-api-key` (`lib/mcp/api-key.ts`: Better Auth verifies a key on first use and once a minute, so its row is not written on every call) | key |
   | First-run setup | `setup` | client IP |
-  | Crons called without `CRON_SECRET` (bank sync, period closing) | `cron-keyless`, `cron-keyless-period-lock` | instance |
+  | Bank sync cron called without `CRON_SECRET` (the period-closing cron does not run without it) | `cron-keyless` | instance |
   | Welcome email of a member added to a company | `welcome-email` (3 a day) | person added |
   | Invitations sent or sent again by a company administrator | `member-invitation` (20 an hour) | user |
   | Invitation emails received | `invitation-email` (5 a day) | address invited |

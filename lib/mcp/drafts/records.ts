@@ -4,8 +4,9 @@
  * customers and suppliers, a copy of an entry as a draft, edits of draft
  * invoices, provisions, grants and draft expense reports, the 411 to 416
  * reclassification and the CFE entry as drafts, the data of the local taxes
- * and of the corporate tax, the record of a filed return, depreciation
- * records, opening balances as a draft.
+ * and of the corporate tax, depreciation records, opening balances as a
+ * draft. The record of a filed return is approved in Kledg
+ * (record_tax_filing, lib/mcp/full-control/filings.ts).
  *
  * Each tool calls the service of the matching API route with that route's
  * body schema (lib/mcp/euros.ts turns the euros the assistant sends into
@@ -28,15 +29,7 @@ import { expenseActorOf } from '@/lib/expense-reports/actor'
 import { ReclassifyBodySchema, reclassifyDoubtfulReceivable } from '@/lib/provisions/doubtful-receivables.service'
 import { SaveLocalTaxesBodySchema, saveLocalTaxes } from '@/lib/local-taxes/save-local-taxes.service'
 import { CfeEntryBodySchema, prepareCfeEntry } from '@/lib/local-taxes/prepare-cfe-entry.service'
-import {
-  CorporateTaxFilingBodySchema,
-  CorporateTaxFilingQuerySchema,
-  CorporateTaxInputsBodySchema,
-  deleteCorporateTaxFiling,
-  recordCorporateTaxFiling,
-  saveCorporateTaxInputs,
-} from '@/lib/corporate-tax/record-corporate-tax.service'
-import { VatFilingBodySchema, VatFilingQuerySchema, deleteVatFiling, recordVatFiling } from '@/lib/vat-returns/record-vat-filing.service'
+import { CorporateTaxInputsBodySchema, saveCorporateTaxInputs } from '@/lib/corporate-tax/record-corporate-tax.service'
 import { LinkDepreciationEntrySchema, SaveDepreciationRecordSchema } from '@/lib/fixed-assets/schemas'
 import { linkDepreciationRecord, saveDepreciationRecord } from '@/lib/fixed-assets/manage-depreciation-records.service'
 import { postOpeningBalances } from '@/lib/accounting/opening-balance/post-opening-balances.service'
@@ -151,17 +144,31 @@ const updateGrantTool = draftTool({
   name: 'update_investment_grant',
   title: 'Modifier une subvention d’investissement',
   summary:
-    'Replaces an investment grant recorded in Kledg (same fields as create_investment_grant, amount in euros); its terms are fixed once a transfer is validated (409).',
+    'Replaces an investment grant recorded in Kledg (same fields as create_investment_grant, amount in euros). The share already transferred to the result before Kledg followed the grant is `alreadyTransferred` (alias `carried`): omitted, it keeps its current value. Its terms are fixed once a transfer is validated (409).',
   never: NEVER_POSTS,
   amounts: 'euros',
   units: 'Dates as yyyy-mm-dd, durations in years.',
-  input: { grantId: id('La subvention').describe('Grant id, from get_year_end_inventory.'), grant: assistantInput(GrantBodySchema) },
+  input: {
+    grantId: id('La subvention').describe('Grant id, from get_year_end_inventory.'),
+    grant: z.strictObject({
+      ...assistantShape(GrantBodySchema),
+      alreadyTransferred: eurosInput.min(0).optional().describe('Share already transferred to the result before Kledg followed it, in euros (same field as create_investment_grant; omitted: unchanged).'),
+    }),
+  },
   permission: { entries: ['update'] },
   destructive: true,
   idempotent: true,
   async execute(args) {
-    const grant = await updateInvestmentGrant(args.companyId, args.grantId, routeBody(GrantBodySchema, args.grant))
-    return { changes: forAssistant(grant), reviewUrl: kledgPageUrl(args.companyId, 'investment-grants'), message: 'Subvention modifiée.' }
+    // assistantShape is untyped: the fields are those of GrantBodySchema in euros, plus the alias
+    const { alreadyTransferred, carried, ...grant } = args.grant as { alreadyTransferred?: number; carried?: number } & Record<string, unknown>
+    if (alreadyTransferred !== undefined && carried !== undefined && carried !== alreadyTransferred) {
+      throw new ValidationError('alreadyTransferred et carried désignent le même montant déjà repris\u00a0: donnez une seule valeur.')
+    }
+    const transferred = carried ?? alreadyTransferred
+    // Neither given: no carriedCents in the body, the service keeps the stored amount
+    const body = routeBody(GrantBodySchema, transferred === undefined ? grant : { ...grant, carried: transferred })
+    const updated = await updateInvestmentGrant(args.companyId, args.grantId, body)
+    return { changes: forAssistant(updated), reviewUrl: kledgPageUrl(args.companyId, 'investment-grants'), message: 'Subvention modifiée.' }
   },
   audit: (args) => ({ grantId: args.grantId }),
 })
@@ -261,54 +268,6 @@ const corporateTaxInputsTool = draftTool({
     return { changes: forAssistant(saved), reviewUrl: kledgPageUrl(companyId, 'impot-societes'), message: 'Données de l’impôt sur les sociétés enregistrées.' }
   },
   audit: (args) => ({ fiscalYearId: args.fiscalYearId }),
-})
-
-const recordFilingTool = draftTool({
-  name: 'record_tax_filing',
-  title: 'Enregistrer le dépôt d’une déclaration',
-  summary:
-    'Records that the user filed a return on impots.gouv.fr, or removes that record (action remove): tax vat for a VAT return (period aaaa-mm, aaaa-Tn or aaaa; filing date, amount paid and credit carried forward), tax corporate_tax for the corporate tax return of a fiscal year (filing date, result before deficits, deficits imputed, tax, reduced rate). The deadlines then show it filed. Other deadlines are marked with mark_declaration.',
-  never: 'files or pays anything on impots.gouv.fr, and never books an entry.',
-  amounts: 'euros',
-  units: 'Dates as yyyy-mm-dd.',
-  input: {
-    tax: z.enum(['vat', 'corporate_tax']),
-    action: z.enum(['record', 'remove']).default('record'),
-    vat: assistantInput(VatFilingBodySchema).optional().describe('tax vat, action record: the filing (period, filedOn, amountDue, credit).'),
-    corporateTax: assistantInput(CorporateTaxFilingBodySchema).optional().describe('tax corporate_tax, action record: the filing.'),
-    period: z.string().max(20).optional().describe('tax vat, action remove: the period.'),
-    fiscalYearId: z.string().max(100).optional().describe('tax corporate_tax, action remove: the fiscal year.'),
-  },
-  permission: { entries: ['create'] },
-  destructive: true,
-  idempotent: true,
-  async execute(args, ctx) {
-    const options = { userId: ctx.access.user.id }
-    const page = args.tax === 'vat' ? 'declarations-tva' : 'impot-societes'
-    let changes: unknown
-    if (args.tax === 'vat') {
-      changes =
-        args.action === 'remove'
-          ? await deleteVatFiling(args.companyId, routeBody(VatFilingQuerySchema, { period: args.period }).period)
-          : await recordVatFiling(args.companyId, routeBody(VatFilingBodySchema, args.vat ?? {}), options)
-    } else {
-      changes =
-        args.action === 'remove'
-          ? await deleteCorporateTaxFiling(args.companyId, routeBody(CorporateTaxFilingQuerySchema, { fiscalYearId: args.fiscalYearId }).fiscalYearId)
-          : await recordCorporateTaxFiling(args.companyId, routeBody(CorporateTaxFilingBodySchema, args.corporateTax ?? {}), options)
-    }
-    return {
-      changes: forAssistant(changes),
-      reviewUrl: kledgPageUrl(args.companyId, page),
-      message: args.action === 'remove' ? 'Enregistrement du dépôt retiré.' : 'Dépôt enregistré : rien n’a été déposé ni payé par Kledg.',
-    }
-  },
-  audit: (args) => ({
-    tax: args.tax,
-    action: args.action,
-    period: args.period ?? (args.vat as { period?: string } | undefined)?.period ?? null,
-    fiscalYearId: args.fiscalYearId ?? (args.corporateTax as { fiscalYearId?: string } | undefined)?.fiscalYearId ?? null,
-  }),
 })
 
 const depreciationRecordTool = draftTool({
@@ -424,7 +383,6 @@ export function registerRecordDraftTools(register: RegisterDraftTool) {
   register(saveLocalTaxesTool)
   register(prepareCfeTool)
   register(corporateTaxInputsTool)
-  register(recordFilingTool)
   register(depreciationRecordTool)
   register(openingBalancesTool)
 }

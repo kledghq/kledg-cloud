@@ -97,6 +97,7 @@ const LEVEL: Record<string, AccessLevel> = {
   auto_letter_account: 'admin',
   manage_fixed_asset: 'admin',
   manage_depreciation_record: 'admin',
+  record_fixed_asset_disposal: 'admin',
 }
 
 const PROVISION = { category: 'RISK_CHARGE', label: 'Litige Martin', justification: "Estimation de l'avocat", accountCode: '1511', openedOn: '2025-03-01' }
@@ -152,6 +153,7 @@ const ARGS: Record<string, Record<string, unknown>> = {
   auto_letter_account: { accountCode: '411' },
   manage_fixed_asset: { action: 'delete', fixedAssetId: 'x' },
   manage_depreciation_record: { action: 'delete', fixedAssetId: 'x', recordId: 'x' },
+  record_fixed_asset_disposal: { action: 'cancel', fixedAssetId: 'x' },
 }
 
 /** High-impact calls (the execution mode applies): ARGS of these tools are high impact unless replaced here. */
@@ -179,6 +181,7 @@ const HIGH_IMPACT: Record<string, Record<string, unknown>> = {
   auto_letter_account: ARGS.auto_letter_account,
   manage_fixed_asset: ARGS.manage_fixed_asset,
   manage_depreciation_record: ARGS.manage_depreciation_record,
+  record_fixed_asset_disposal: ARGS.record_fixed_asset_disposal,
 }
 
 /** Writing tools a viewer may still call (expenses:submit): its own expense reports. */
@@ -570,7 +573,8 @@ describe.skipIf(!available)('MCP tools covering the API', () => {
       const edited = await ok(writer, 'update_draft_invoice', {
         companyId: ids.aCompany,
         invoiceId,
-        invoice: { direction: 'PURCHASE', tiersId: tiers.tiersId, number: 'F-001', issueDate: '2025-03-16', lines: [{ label: 'Papier', quantity: '2', unitPrice: 100, vatRate: 20, accountCode: '606100' }] },
+        // The direction belongs to the creation: the update refuses it rather than dropping it (inputs are strict)
+        invoice: { tiersId: tiers.tiersId, number: 'F-001', issueDate: '2025-03-16', lines: [{ label: 'Papier', quantity: '2', unitPrice: 100, vatRate: 20, accountCode: '606100' }] },
       })
       expect(edited.changes.totalExclTax).toBe(200)
 
@@ -684,7 +688,8 @@ describe.skipIf(!available)('MCP tools covering the API', () => {
       const establishment = await ok(admin, 'manage_company_records', {
         companyId: ids.aCompany,
         action: 'create_establishment',
-        establishment: { siret, name: 'Siège', address: { street: '1 rue de Rivoli', postalCode: '75001', city: 'Paris' } },
+        // An establishment names its address by addressId (create_address first): an inline address is refused, not dropped
+        establishment: { siret, name: 'Siège' },
       })
       expect(establishment.siret).toBe(siret)
       const regime = await ok(admin, 'manage_company_records', { companyId: ids.aCompany, action: 'add_tax_regime', taxRegime: { regimeType: 'vat', regime: 'normal', startDate: '2025-01-01' } })
@@ -773,13 +778,21 @@ describe.skipIf(!available)('MCP tools covering the API', () => {
 
       const inputs = await ok(writer, 'save_corporate_tax_inputs', { companyId: ids.aCompany, fiscalYearId: ids.aFy, deficitsOpening: 1000.25, capitalPaidUp: true })
       expect(inputs.changes).toBeTruthy()
-      const filing = await ok(writer, 'record_tax_filing', {
+      // A record settles a deadline: approved by the user in Kledg first
+      const filingArgs = {
         companyId: ids.aCompany,
         tax: 'corporate_tax',
         corporateTax: { fiscalYearId: ids.aFy, filedOn: '2026-05-15', resultBeforeDeficits: 5000, deficitsImputed: 1000.25, corporateTax: 600, reducedRate: true },
-      })
+      }
+      const dry = await ok(writer, 'record_tax_filing', filingArgs)
+      expect(dry.dryRun).toBe(true)
+      await approve(dry.actionId)
+      const filing = await ok(writer, 'record_tax_filing', { ...filingArgs, actionId: dry.actionId })
       expect(filing.message).toMatch(/Dépôt enregistré/)
-      await ok(writer, 'record_tax_filing', { companyId: ids.aCompany, tax: 'corporate_tax', action: 'remove', fiscalYearId: ids.aFy })
+      const removeArgs = { companyId: ids.aCompany, tax: 'corporate_tax', action: 'remove', fiscalYearId: ids.aFy }
+      const removal = await ok(writer, 'record_tax_filing', removeArgs)
+      await approve(removal.actionId)
+      await ok(writer, 'record_tax_filing', { ...removeArgs, actionId: removal.actionId })
       const badAmount = await call(writer, 'save_corporate_tax_inputs', { companyId: ids.aCompany, fiscalYearId: ids.aFy, deficitsOpening: 10.001 })
       expect(badAmount.text).toBe('deficitsOpening : montant invalide, en euros avec deux décimales au plus.')
     })
@@ -810,6 +823,14 @@ describe.skipIf(!available)('MCP tools covering the API', () => {
       expect(refused.ok).toBe(false)
       const renamed = await ok(admin, 'manage_fixed_asset', { companyId: ids.aCompany, action: 'update', fixedAssetId: asset.id, fields: { label: 'Ordinateur portable' } })
       expect(renamed.fixedAsset.label).toBe('Ordinateur portable')
+
+      // Its exit: a draft exit entry, the gain short term (company at the IS)
+      const disposal = await ok(admin, 'record_fixed_asset_disposal', { companyId: ids.aCompany, action: 'record', fixedAssetId: asset.id, disposalDate: '2025-12-31', kind: 'sale', price: 1000 })
+      expect(disposal.entry.id).toBeTruthy()
+      expect(disposal.price).toBe(1000)
+      expect(await prisma.accountingEntry.count({ where: { id: disposal.entry.id, status: 'draft' } })).toBe(1)
+      const cancelled = await ok(admin, 'record_fixed_asset_disposal', { companyId: ids.aCompany, action: 'cancel', fixedAssetId: asset.id })
+      expect(cancelled.deletedEntry).toBe(true)
     })
 
     it('letters a third-party account automatically', async () => {

@@ -35,9 +35,10 @@ import {
 import type { TabularOptions } from '@/lib/banking/import/types'
 import { day } from '@/lib/mcp/tool-result'
 import { fullControlTool, type RegisterTool } from './define'
-import { companyLock, rowTargets, ruleTargets } from './fingerprint'
+import { companyLock, entryTargets, rowTargets, ruleTargets } from './fingerprint'
 import { ACTS_AS_USER, TWO_STEP } from './descriptions'
 import { accountIdsByCode, euros, fiscalYearOfDay, isoDate, journalIdByCode } from './resolve'
+import { rulesPreview } from './rule-preview'
 
 const transactionId = z.string().min(1).describe('Bank transaction id, from list_bank_transactions.')
 
@@ -76,12 +77,31 @@ const reconcileInput = {
 const reconcileTransaction = fullControlTool({
   name: 'reconcile_transaction',
   title: 'Rapprocher une transaction',
-  description: `Reconciles a bank transaction (rapprochement): with counterpart lines, creates the DRAFT entry (bank line added by Kledg) and links it, atomically; with entryId, links an existing entry; with withoutEntry, only marks it reconciled. Refused (409) when the transaction is already reconciled, so a retry never creates a second entry. ${ACTS_AS_USER}`,
+  description: `Reconciles a bank transaction (rapprochement): with counterpart lines, creates the DRAFT entry (bank line added by Kledg) and links it, atomically; with entryId, links an existing entry; with withoutEntry, only marks it reconciled. Refused (409) when the transaction is already reconciled, so a retry never creates a second entry. ${ACTS_AS_USER} Linking an existing entry or marking reconciled without an entry takes the transaction off the lists to process with nothing to review, like bulk_reconcile mark_reconciled: ${TWO_STEP}`,
   input: reconcileInput,
   permission: { banking: ['reconcile'] },
   amounts: 'euros',
   never: 'validates the draft entry it creates.',
-  confirmation: false,
+  confirmation: true,
+  // A draft entry is reviewed before it counts; a link or a pointage is not (KLEDG-R3-MCP-10)
+  highImpactWhen: ({ lines, entryId, withoutEntry }) => !(lines && lines.length > 0) && (Boolean(entryId) || withoutEntry === true),
+  targetState: ({ companyId, transactionId, entryId }) => [
+    companyLock(companyId),
+    ...rowTargets('bank_transactions', companyId, transactionId),
+    ...(entryId ? entryTargets(companyId, [entryId]) : []),
+  ],
+  preview: async ({ companyId, transactionId, entryId, withoutEntry }) => {
+    const transaction = await loadTransaction(companyId, transactionId)
+    return {
+      transaction: { id: transaction.id, date: day(transaction.date), label: transaction.label, amount: Number(transaction.amount), side: transaction.side, reconciled: transaction.reconciled },
+      effect: entryId
+        ? "Transaction rapprochée avec l'écriture existante indiquée."
+        : withoutEntry
+          ? 'Transaction marquée rapprochée sans écriture (pointage).'
+          : 'Écriture en brouillon créée avec la ligne de banque, transaction rapprochée.',
+      entryId: entryId ?? null,
+    }
+  },
   async execute({ companyId, transactionId, entryId, journalCode, date, description, reference, lines, withoutEntry }) {
     if (lines && lines.length > 0) {
       const transaction = await loadTransaction(companyId, transactionId)
@@ -156,7 +176,7 @@ const unreconcileTransactionTool = fullControlTool({
 const runRules = fullControlTool({
   name: 'run_rules',
   title: "Exécuter les règles d'affectation",
-  description: `Runs the assignment rules engine (règles d'affectation) on unreconciled bank transactions of the current fiscal year, or on the given ones: each transaction that meets every condition of an enabled rule gets its DRAFT entry and is reconciled (several matching rules: highest priority, then most conditions); reconciled transactions are skipped, so running it twice creates nothing twice. ${ACTS_AS_USER} ${TWO_STEP} The dry run counts the transactions processed, matched and that would be applied.`,
+  description: `Runs the assignment rules engine (règles d'affectation) on unreconciled bank transactions of the current fiscal year, or on the given ones: each transaction that meets every condition of an enabled rule gets its DRAFT entry and is reconciled (several matching rules: highest priority, then most conditions); reconciled transactions are skipped, so running it twice creates nothing twice. ${ACTS_AS_USER} ${TWO_STEP} The dry run counts the transactions processed, matched and that would be applied, and lists each rule that would apply: its name, the accounts it books to, its number of transactions and whether an assistant created or changed it (and when).`,
   input: {
     transactionIds: z.array(z.string().min(1)).min(1).max(500).optional().describe('Only these transactions (default: every unreconciled transaction of the current fiscal year).'),
   },
@@ -165,11 +185,21 @@ const runRules = fullControlTool({
   never: 'validates the entries the rules create (drafts), or reconciles a transaction twice.',
   idempotent: true,
   confirmation: true,
-  // The dry run only counts: the rules themselves are bound to the approval (update_rule before the execution refuses it).
+  // The rules themselves are bound to the approval too (update_rule before the execution refuses it).
   targetState: ({ companyId }) => ruleTargets(companyId),
   async preview({ companyId, transactionIds }) {
     const result = await processTransactions({ companyId, transactionIds, autoApply: false })
-    return { processed: result.processed, matched: result.matched, wouldApply: result.applicable, errors: result.errors }
+    const rules = await rulesPreview(companyId, result.applicableByRule)
+    return {
+      processed: result.processed,
+      matched: result.matched,
+      wouldApply: result.applicable,
+      errors: result.errors,
+      // What the person approving sees: each rule, its accounts, its transactions, and an assistant's change of it
+      rules: rules.listed,
+      rulesTotal: rules.total,
+      rulesChangedByAssistant: rules.byAssistant,
+    }
   },
   execute: ({ companyId, transactionIds }) => processTransactions({ companyId, transactionIds, autoApply: true }),
   audit: ({ transactionIds }, result) => ({ transactionIds: transactionIds ?? 'all', applied: result.applied, processed: result.processed }),

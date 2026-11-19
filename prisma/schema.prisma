@@ -457,6 +457,7 @@ model Account {
   @@unique([companyId, code, fiscalYearId])
   @@index([companyId])
   @@index([fiscalYearId])
+  @@index([parentId])
   @@map("accounts")
 }
 
@@ -508,6 +509,7 @@ model AccountingEntry {
   lines                   EntryLine[]              @relation("AccountingEntryLines")
   fixedAssetDepreciations FixedAssetDepreciation[] @relation("FixedAssetDepreciationEntry")
   acquiredFixedAssets     FixedAsset[]             @relation("FixedAssetAcquisitionEntry")
+  disposedFixedAssets     FixedAsset[]             @relation("FixedAssetDisposalEntry")
   provisionAssessment     ProvisionAssessment?     @relation("ProvisionAssessmentEntry")
   accountingChange        AccountingChange?        @relation("AccountingChangeEntry")
   investmentGrantTransfer InvestmentGrantTransfer? @relation("InvestmentGrantTransferEntry")
@@ -525,6 +527,7 @@ model AccountingEntry {
   @@index([fiscalYearId])
   @@index([date])
   @@index([companyId, date])
+  @@index([journalId])
   @@map("accounting_entries")
 }
 
@@ -636,6 +639,7 @@ model BankConnection {
   @@unique([companyId, provider])
   @@index([companyId])
   @@index([provider])
+  @@index([selectedAccountId])
   @@map("bank_connections")
 }
 
@@ -678,6 +682,7 @@ model BankAccount {
   @@index([shouldSync])
   @@index([iban])
   @@index([integrationResourceId])
+  @@index([supersededById])
   @@map("bank_accounts")
 }
 
@@ -977,6 +982,14 @@ model FixedAsset {
   acquisitionValue      Decimal   @db.Decimal(15, 2) // Valeur d'acquisition (HT)
   amortizableAmount     Decimal?  @db.Decimal(15, 2) // Montant amortissable (peut être différent de acquisitionValue)
   disposalDate          DateTime? // Date de cession
+  /// Exit of the asset (lib/fixed-assets/disposal.ts): sale, scrap or
+  /// destruction; null while none is recorded (an older disposalDate alone
+  /// only stops the depreciation plan).
+  disposalKind          String?
+  /// Sale price excluding VAT; 0 for a retirement without compensation.
+  disposalPrice         Decimal?  @db.Decimal(15, 2)
+  /// Exit entry Kledg prepared as a draft (record-disposal.service.ts).
+  disposalEntryId       String?
   depreciationRate      Decimal?  @db.Decimal(5, 2) // Taux d'amortissement annuel (%)
   depreciationDuration  Int? // Durée d'amortissement en années
   depreciationMethod    String    @default("linear") // linear, declining
@@ -987,6 +1000,11 @@ model FixedAsset {
   expenseAccountId      String // Compte de charge d'amortissement (ex: 681)
   isActive              Boolean   @default(true) // Indique si l'immobilisation est active
   isFullyPaid           Boolean   @default(false) // Indique si l'immobilisation est entièrement payée
+  /// Depreciation booked before openingDepreciationDate, outside Kledg (an asset
+  /// acquired before the first fiscal year in Kledg): the plan's months before
+  /// that day add up to it (lib/fixed-assets/depreciation-plan.ts). Both or neither.
+  openingDepreciation     Decimal?  @db.Decimal(15, 2)
+  openingDepreciationDate DateTime?
   /// Entry that booked the acquisition, when Kledg created the asset with it
   /// (simple mode, durable equipment). The asset goes with that entry: deleting
   /// the draft deletes the asset first (deleteFixedAssetsAcquiredByEntryInTx),
@@ -998,6 +1016,7 @@ model FixedAsset {
   // Relations
   company             Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   acquisitionEntry    AccountingEntry?         @relation("FixedAssetAcquisitionEntry", fields: [acquisitionEntryId], references: [id], onDelete: NoAction)
+  disposalEntry       AccountingEntry?         @relation("FixedAssetDisposalEntry", fields: [disposalEntryId], references: [id], onDelete: SetNull)
   simpleModeEntry     SimpleModeEntry?
   assetAccount        Account                  @relation("FixedAssetAccount", fields: [assetAccountId], references: [id], onDelete: NoAction)
   depreciationAccount Account                  @relation("DepreciationAccount", fields: [depreciationAccountId], references: [id], onDelete: NoAction)
@@ -1008,6 +1027,10 @@ model FixedAsset {
 
   @@index([companyId])
   @@index([acquisitionEntryId])
+  @@index([disposalEntryId])
+  @@index([assetAccountId])
+  @@index([depreciationAccountId])
+  @@index([expenseAccountId])
   @@map("fixed_assets")
 }
 
@@ -1484,6 +1507,7 @@ model Invitation {
 
   @@index([organizationId])
   @@index([email])
+  @@index([inviterId])
   @@map("invitation")
 }
 
@@ -1755,11 +1779,16 @@ model AiAccessGrant {
   /// How full control runs high-impact tools: "automatic" (executes on the call)
   /// or "validation" (approved by the user in Kledg first). lib/ai-access/access.ts
   executionMode String                 @default("automatic")
+  /// Last time the user typed their password to give this assistant full
+  /// control (KLEDG-R3-AUTH-01). An OAuth token's kledg:admin scope counts only
+  /// when set, so a session alone cannot plant a full control assistant.
+  fullControlConfirmedAt DateTime?
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
   companies     AiAccessGrantCompany[]
 
   @@unique([userId, clientId])
+  @@index([clientId])
   @@map("ai_access_grants")
 }
 
@@ -1935,6 +1964,7 @@ enum InvoiceDirection {
 enum InvoiceSource {
   MANUAL // Saisie dans Kledg
   QONTO // Importée de Qonto
+  E_INVOICE // Importée d'un fichier de facture électronique (Factur-X, CII, UBL)
 }
 
 /// Where the number of an invoice comes from (docs/factures-et-tiers.md, Numérotation).
@@ -2060,11 +2090,14 @@ model Invoice {
   /// Provider reference of the PDF (Qonto attachment uuid): Kledg stores no file, it asks Qonto for a fresh link.
   externalAttachmentId String?
   attachmentFileName   String?
+  /// The imported e-invoice file as received (source E_INVOICE), kept in its original format (LPF art. L102 B).
+  documentFileId       String?
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
   company               Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   tiers                 Tiers                 @relation(fields: [tiersId], references: [id], onDelete: Restrict)
+  documentFile          ReceiptFile?          @relation(fields: [documentFileId], references: [id], onDelete: NoAction)
   entry                 AccountingEntry?      @relation("InvoiceEntry", fields: [entryId], references: [id], onDelete: SetNull)
   lines                 InvoiceLine[]
   vatBreakdown          InvoiceVatBreakdown[]
@@ -2077,6 +2110,7 @@ model Invoice {
   @@unique([companyId, source, externalId])
   @@index([companyId, direction, issueDate])
   @@index([tiersId])
+  @@index([documentFileId])
   @@map("invoices")
 }
 
@@ -3177,6 +3211,10 @@ model CompanyInvitation {
   expiresAt    DateTime
   lastSentAt   DateTime  @default(now())
   sendCount    Int       @default(1)
+  /// The current link went back to the inviter (no email delivery), so
+  /// holding it proves nothing about the mailbox: accepting never takes over
+  /// an existing account then (KLEDG-SEC-011). True for rows created before.
+  linkShared   Boolean   @default(true)
   acceptedAt   DateTime?
   acceptedById String?
   revokedAt    DateTime?
@@ -3213,6 +3251,7 @@ model ReceiptFile {
   company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   attachments    Attachment[]
   stagedReceipts StagedReceipt[]
+  invoices       Invoice[]
 
   @@unique([companyId, sha256])
   @@map("receipt_files")
@@ -3263,5 +3302,8 @@ model StagedReceipt {
   @@index([uploadedById])
   @@index([expiresAt])
   @@index([fileId])
+  @@index([bankTransactionId])
+  @@index([attachmentId])
+  @@index([expenseReportId])
   @@map("staged_receipts")
 }

@@ -55,7 +55,7 @@ const FULL_CONTROL_TOOLS: Record<string, boolean> = {
   reverse_entry: true,
   update_draft_entry: false,
   delete_draft_entry: true,
-  reconcile_transaction: false,
+  reconcile_transaction: true,
   unreconcile_transaction: true,
   run_rules: true,
   list_rules: false,
@@ -77,6 +77,7 @@ const FULL_CONTROL_TOOLS: Record<string, boolean> = {
   letter_entry_lines: true,
   unletter_entry_lines: true,
   create_draft_invoice: true,
+  import_e_invoice: true,
   manage_accounts: true,
   manage_journals: true,
   manage_fiscal_years: true,
@@ -105,6 +106,7 @@ const FULL_CONTROL_TOOLS: Record<string, boolean> = {
   auto_letter_account: true,
   manage_fixed_asset: true,
   manage_depreciation_record: true,
+  record_fixed_asset_disposal: true,
   archive_company: true,
   restore_company: true,
   create_company: true,
@@ -116,6 +118,8 @@ const INSTANCE_TOOLS = new Set(['create_company'])
 /** Draft-level tools (kledg:write) of lib/mcp/drafts, besides create_draft_entry. */
 /** Receipts photographed in the assistant (lib/mcp/full-control/receipts.ts, level write). */
 const RECEIPT_TOOLS = ['capture_receipt', 'stage_receipt', 'file_receipt']
+/** Records that settle a deadline (lib/mcp/full-control/filings.ts, level write): approved in Kledg on a draft-level connection. */
+const FILING_TOOLS = ['mark_declaration', 'record_tax_filing']
 
 const DRAFT_TOOLS = [
   'save_vat_deduction_settings',
@@ -141,7 +145,6 @@ const DRAFT_TOOLS = [
   'accept_expense_suggestion',
   'prepare_vat_settlement',
   'prepare_corporate_tax_entry',
-  'mark_declaration',
   'accept_all_expense_suggestions',
   'manage_tiers',
   'duplicate_entry',
@@ -154,7 +157,6 @@ const DRAFT_TOOLS = [
   'prepare_cfe_entry',
   'save_corporate_tax_inputs',
   'save_remuneration_scenario',
-  'record_tax_filing',
   'save_depreciation_record',
   'prepare_opening_balances',
 ]
@@ -235,18 +237,18 @@ describe('registerKledgTools', () => {
   it('only exposes create_draft_entry and the draft tools with write access', () => {
     const readOnly = fakeServer()
     registerKledgTools(readOnly as never, { user, canWrite: false, canAdmin: false, caller, executionMode: 'validation' })
-    for (const name of ['create_draft_entry', ...DRAFT_TOOLS]) expect(readOnly.tools.has(name), name).toBe(false)
+    for (const name of ['create_draft_entry', ...DRAFT_TOOLS, ...FILING_TOOLS]) expect(readOnly.tools.has(name), name).toBe(false)
 
     const writer = fakeServer()
     registerKledgTools(writer as never, { user, canWrite: true, canAdmin: false, caller, executionMode: 'validation' })
     const added = [...writer.tools.keys()].filter((name) => !readOnly.tools.has(name)).sort()
-    expect(added).toEqual(['create_draft_entry', ...DRAFT_TOOLS, ...RECEIPT_TOOLS].sort())
+    expect(added).toEqual(['create_draft_entry', ...DRAFT_TOOLS, ...RECEIPT_TOOLS, ...FILING_TOOLS].sort())
     for (const name of added) {
       // capture_receipt only opens the capture view
       if (name !== 'capture_receipt') expect(writer.tools.get(name)?.annotations?.readOnlyHint, name).toBe(false)
       expect(writer.tools.get(name)?.description, name).toContain('kledg:write')
-      // Draft tools never follow the full control flow; file_receipt's attach waits for the user's approval in Kledg.
-      if (name === 'file_receipt') expect(writer.tools.get(name)?.inputSchema?.shape, name).toHaveProperty('actionId')
+      // Draft tools never follow the full control flow; file_receipt's attach and the filing records wait for the user's approval in Kledg.
+      if (name === 'file_receipt' || FILING_TOOLS.includes(name)) expect(writer.tools.get(name)?.inputSchema?.shape, name).toHaveProperty('actionId')
       else expect(writer.tools.get(name)?.inputSchema?.shape, name).not.toHaveProperty('actionId')
     }
   })
@@ -372,7 +374,7 @@ describe('draft tools', () => {
   // checks every right of the tool through the company guard before the
   // service runs.
   const dir = path.resolve(__dirname, '../drafts')
-  const toolFiles = ['budgets.ts', 'year-end.ts', 'expense-reports.ts', 'approval.ts', 'simple-mode.ts', 'vat-returns.ts', 'corporate-tax.ts', 'declarations.ts', 'records.ts', 'remuneration.ts', 'annexe.ts', 'training.ts']
+  const toolFiles = ['budgets.ts', 'year-end.ts', 'expense-reports.ts', 'approval.ts', 'simple-mode.ts', 'vat-returns.ts', 'corporate-tax.ts', 'records.ts', 'remuneration.ts', 'annexe.ts', 'training.ts']
   const define = readFileSync(path.join(dir, 'define.ts'), 'utf8')
 
   it('checks the company guard first, in the single registration path', () => {

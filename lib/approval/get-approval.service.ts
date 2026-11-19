@@ -20,6 +20,7 @@ import { parseDeadlineSettings } from '@/lib/deadlines/settings'
 import { formatAddress } from '@/lib/utils/address'
 import { calendarDayOf, todayUtc } from '@/lib/utils/date'
 import { toCents } from '@/lib/utils/money'
+import { equityFromBalances } from './equity'
 import { buildApprovalPack, type ApprovalContext, type ApprovalPack } from './pack'
 import { ApprovalDetailsSchema, emptyDetails, type ApprovalDetails } from './schemas'
 import { SOURCES, type LegalSource } from './sources'
@@ -56,8 +57,10 @@ async function yearFigures(companyId: string, fy: YearRow) {
   // 120 / 129 carried forward and not allocated yet: the previous year's result.
   const unallocatedPreviousCents = credit((c) => c.startsWith('120') || c.startsWith('129'))
   const revenueCents = credit((c) => c.startsWith('70'))
+  // Capitaux propres (PCG art. 934-1): classes 10 to 14, with the result of the year not yet allocated
+  const { equityCents } = equityFromBalances(rows)
   const sheet = await generateBalanceSheet(companyId, fy.id, 'complete')
-  return { balances, unallocatedPreviousCents, revenueCents, totalAssetsCents: toCents(sheet.actifTotal) ?? 0 }
+  return { balances, unallocatedPreviousCents, revenueCents, equityCents, totalAssetsCents: toCents(sheet.actifTotal) ?? 0 }
 }
 
 /** What the books and the company record say about the approval of `fiscalYearId`. */
@@ -112,6 +115,7 @@ async function loadApprovalContext(companyId: string, fiscalYearId: string, now?
       previous: before ? { revenueCents: before.revenueCents, totalAssetsCents: before.totalAssetsCents } : null,
     },
     draftEntries: drafts,
+    equityCents: current.equityCents,
     unallocatedPreviousCents: current.unallocatedPreviousCents,
   }
 }
@@ -202,6 +206,7 @@ export async function getApproval(companyId: string, fiscalYearId: string, now?:
     balances: context.balances,
     figures: context.figures,
     draftEntries: context.draftEntries,
+    equityCents: context.equityCents,
   }
   const seen = new Set<string>()
   const sources = [...pack.deadlines.sources, ...pack.managementReport.sources, ...pack.documents.flatMap((d) => d.sources)].filter((s) => {

@@ -76,6 +76,21 @@ export function fixedAssetUpdateData(input: UpdateFixedAssetInput): Prisma.Fixed
   if (input.expenseAccountId) data.expenseAccountId = input.expenseAccountId
   if (input.isFullyPaid !== undefined && input.isFullyPaid !== null) data.isFullyPaid = input.isFullyPaid
   if (input.isActive !== undefined && input.isActive !== null) data.isActive = input.isActive
+  // Opening depreciation: the pair together; an empty amount clears both (the database checks they go together)
+  if (input.openingDepreciation !== undefined || input.openingDepreciationDate !== undefined) {
+    if (!input.openingDepreciation && !input.openingDepreciationDate) {
+      data.openingDepreciation = null
+      data.openingDepreciationDate = null
+    } else {
+      const cents = amountCents(input.openingDepreciation, "Amortissements cumulés à l'ouverture")
+      const date = dateOf(input.openingDepreciationDate, "Date des amortissements cumulés à l'ouverture")
+      if (cents === null || date === null) {
+        throw new ValidationError("Indiquez le montant des amortissements cumulés à l'ouverture et la date à laquelle il est arrêté, ou aucun des deux.")
+      }
+      data.openingDepreciation = centsToDecimal(cents)
+      data.openingDepreciationDate = date
+    }
+  }
   return data
 }
 
@@ -83,6 +98,14 @@ export function fixedAssetUpdateData(input: UpdateFixedAssetInput): Prisma.Fixed
 export async function updateFixedAsset(companyId: string, fixedAssetId: string, input: UpdateFixedAssetInput) {
   await assertFixedAssetOwned(companyId, fixedAssetId)
   const data = fixedAssetUpdateData(input)
+  if (data.disposalDate !== undefined) {
+    // A recorded exit owns its date: its entry is dated that day (record-disposal.service.ts)
+    const current = await prisma.fixedAsset.findFirst({ where: { id: fixedAssetId, companyId }, select: { disposalKind: true, disposalDate: true } })
+    const changed = (current?.disposalDate?.getTime() ?? null) !== ((data.disposalDate as Date | null)?.getTime() ?? null)
+    if (current?.disposalKind && changed) {
+      throw new ValidationError("La sortie de cette immobilisation est enregistrée avec son écriture : modifiez-la depuis « Sortie de l'immobilisation », qui prépare l'écriture à la nouvelle date.")
+    }
+  }
 
   // The accounts must belong to the company
   await assertAllOwned(

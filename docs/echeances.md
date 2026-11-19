@@ -29,7 +29,7 @@ règle et ses sources officielles (`lib/deadlines/rules.ts`) :
 | CVAE | Déclaration 1330-CVAE, acomptes 1329-AC, liquidation 1329-DEF ; plus rien pour les années 2030 et suivantes (CVAE supprimée) | CGI, art. 1586 ter à 1586 nonies et 1679 septies ; loi n° 2025-127, art. 62 |
 | Taxe sur les salaires | Relevés 2501 mensuels ou trimestriels (d'après la taxe de l'année précédente), déclaration annuelle 2502 au 15 janvier (31 janvier admis), pour les années où la taxe est due, d'après la page Taxe sur les salaires | CGI, art. 231 ; BOI-TPS-TS-40 ; notice 2501-SD |
 | Formation | Bilan pédagogique et financier de chaque exercice d'un organisme de formation, avant le 30 avril de l'année qui suit sa clôture (prolongations annoncées : 31 mai 2026) | Code du travail, art. R6352-22 à R6352-24 |
-| Juridique | Approbation des comptes, dépôt au greffe | Code de commerce, L223-26, L225-100, L227-9, L232-22, L232-23 |
+| Juridique | Approbation des comptes, dépôt au greffe ; après des comptes approuvés qui font apparaître des capitaux propres inférieurs à la moitié du capital social, décision sur la dissolution anticipée (quatre mois après l'approbation) et reconstitution des capitaux propres (clôture du deuxième exercice suivant, comptée trois ans après la clôture pour des exercices de douze mois) | Code de commerce, L223-26, L225-100, L227-9, L232-22, L232-23, L223-42, L225-248 |
 
 Les dates sont reportées au jour ouvrable suivant quand l'administration le
 fait ; un jour que Kledg ne connaît pas (celui de la CA3) est indicatif. Le
@@ -86,7 +86,7 @@ champ (409) et indique la page où il s'enregistre.
 | --- | --- | --- |
 | CA3, CA12 | Dépôt enregistré de la déclaration de TVA ([déclarations de TVA](declarations-tva.md)) : déposée à sa date, payée le même jour quand un montant est dû (la TVA se paie avec la déclaration, CGI art. 1692) | Dépôt et paiement |
 | Liasse (2065) | Dépôt enregistré de l'impôt sur les sociétés ([impôt sur les sociétés](impot-societes.md)) | Dépôt |
-| Acompte d'IS n | Acomptes versés de l'exercice sur la page Impôt sur les sociétés | Paiement |
+| Acompte d'IS n | Acomptes versés de l'exercice sur la page Impôt sur les sociétés ; non dû quand le dépôt enregistré de l'exercice de référence montre un impôt, ramené à douze mois, inférieur ou égal à 3 000 € (CGI art. 1668, 1 ; `acomptesNotDue`, `lib/corporate-tax/acomptes.ts`) : l'exercice précédent, ou celui d'avant pour un premier acompte qui tombe avant que sa déclaration soit due. Un exercice que Kledg ne suit pas ne décide rien, et les acomptes du premier exercice suivi portent une note qui renvoie à « Non due » et au réglage `isAcomptes` | Paiement |
 | Approbation, dépôt des comptes | Dates de l'approbation des comptes ([approbation](approbation-des-comptes.md)) | Dépôt |
 | CFE, acompte de CFE | Avis de CFE de zéro saisi dans les impôts locaux : non due | Rien |
 
@@ -123,7 +123,11 @@ Outils MCP ([mcp.md](mcp.md)) : `list_tax_deadlines` (dates et règles),
 `list_declarations_status` (statuts, filtres par catégorie et par statut,
 comptes par statut) et, avec l'accès brouillons, `mark_declaration`
 (enregistre ou retire ; refuse ce qu'un autre module enregistre). Aucun ne
-dépose ni ne paie.
+dépose ni ne paie. Un enregistrement retire le rappel de l'échéance : sans
+le contrôle total, `mark_declaration` (comme `record_tax_filing` pour la TVA
+et l'IS) renvoie un aperçu et attend que l'utilisateur l'approuve dans Kledg
+(page Actions IA à approuver) ; avec le contrôle total, il suit le mode
+d'exécution de la connexion.
 
 ## Stockage
 

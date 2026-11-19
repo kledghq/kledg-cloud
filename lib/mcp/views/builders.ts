@@ -446,10 +446,12 @@ function reconcileQuestion(match: UniqueMatch): string {
 /**
  * The transactions to reconcile. With full control and `matches` (the
  * unique match of each transaction the server found, computed only when
- * the user may reconcile), a transaction that has one gets "Rapprocher",
- * a direct call of reconcile_transaction with that entry (or the rule's
- * lines) after a confirmation click; the others keep "Proposer une
- * écriture" (a message to the assistant) and "Pointer sans écriture".
+ * the user may reconcile), a transaction that has one gets "Rapprocher":
+ * reconcile_transaction with the rule's lines (a draft entry, a direct call
+ * after a confirmation click) or with that entry (high impact: approved in
+ * Kledg in validation mode, dry run then "Confirmer" in automatic mode);
+ * the others keep "Proposer une écriture" (a message to the assistant) and
+ * "Pointer sans écriture" (high impact too).
  */
 export function bankTransactionsList(
   companyId: string,
@@ -469,8 +471,8 @@ export function bankTransactionsList(
         label: 'Rapprocher',
         tool: 'reconcile_transaction',
         arguments: { companyId, ...match.arguments },
-        // reconcile_transaction is a direct write (confirmation: false in lib/mcp/full-control/banking.ts)
-        highImpact: false,
+        // Linking an existing entry needs the user's approval in validation mode; the rule's lines create a draft at once
+        highImpact: match.kind === 'entry',
         primary: true,
         confirm: reconcileQuestion(match),
       })
@@ -486,7 +488,8 @@ export function bankTransactionsList(
           label: 'Pointer sans écriture',
           tool: 'reconcile_transaction',
           arguments: { companyId, transactionId: t.id, withoutEntry: true },
-          highImpact: false,
+          // Reconciled with nothing to review: approved like bulk_reconcile mark_reconciled (KLEDG-R3-MCP-10)
+          highImpact: true,
           confirm: 'Marquer cette transaction comme rapprochée sans écriture (pointage)\u00a0? À faire seulement si son écriture existe déjà ou n’est pas nécessaire. Cliquez à nouveau pour confirmer.',
         })
       }

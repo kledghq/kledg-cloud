@@ -18,6 +18,7 @@ La documentation de Kledg est répartie en deux endroits :
 - [Serveur MCP](mcp.md) : outils, droits, journal d'audit, couverture des fonctionnalités et inventaire de l'API
 - [Vues MCP](mcp-views.md) : vues interactives renvoyées par les outils du serveur MCP
 - [Conformité](conformite.md) : mécanismes qui assurent la tenue de la comptabilité, le FEC et le RGPD
+- [Signaler un problème ou proposer une idée](signaler-un-probleme.md) : issue GitHub préremplie depuis Kledg, contexte technique ajouté, dépôt cible
 
 ## Fonctionnalités : fonctionnement technique
 
@@ -47,6 +48,7 @@ Chaque page renvoie à son guide sur le site.
 - [Organisme de formation](organisme-de-formation.md) : exonération de TVA, coefficient de déduction, bilan pédagogique et financier, taxe sur les salaires
 - [Déclarations de TVA](declarations-tva.md) : CA3 et CA12, lignes et cases, liquidation
 - [Impôt sur les sociétés](impot-societes.md) : résultat fiscal, taux, acomptes, écritures
+- [Liasse fiscale](liasse-fiscale.md) : tableaux de la déclaration de résultat selon le régime, case par case, ce qui reste à remplir à la main, contrôles
 - [Impôts locaux (CFE, CVAE)](impots-locaux.md) : CFE, CVAE, plafonnement
 - [Échéances et suivi des déclarations](echeances.md) : calendrier, statuts, dépôts et paiements
 - [Vue groupe](vue-groupe.md) : espace groupe d'une holding, flux et éliminations

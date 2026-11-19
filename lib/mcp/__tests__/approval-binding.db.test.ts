@@ -214,7 +214,8 @@ describe.skipIf(!available)('MCP approvals and writes (round 3)', () => {
       await ok(key, 'update_draft_invoice', {
         companyId: ids.company,
         invoiceId,
-        invoice: { direction: 'PURCHASE', tiersId: tiers.tiersId, number: 'F-001', issueDate: '2025-03-15', lines: [{ label: 'Papier', quantity: '900', unitPrice: 100, vatRate: 20, accountCode: '606100' }] },
+        // The direction belongs to the creation: the update refuses it rather than dropping it (inputs are strict)
+        invoice: { tiersId: tiers.tiersId, number: 'F-001', issueDate: '2025-03-15', lines: [{ label: 'Papier', quantity: '900', unitPrice: 100, vatRate: 20, accountCode: '606100' }] },
       })
 
       const done = await call(key, 'manage_invoice', { companyId: ids.company, action: 'post', invoiceId, actionId: dry.actionId })
@@ -485,8 +486,15 @@ describe.skipIf(!available)('MCP approvals and writes (round 3)', () => {
       const first = await bankTransaction('PRLV OVH', '12.00')
       const second = await bankTransaction('PRLV OVH', '12.00')
       const entry = await draftEntry('OVH', '12.00')
-      await ok(key, 'reconcile_transaction', { companyId: ids.company, transactionId: first.id, entryId: entry.id })
-      const again = await call(key, 'reconcile_transaction', { companyId: ids.company, transactionId: second.id, entryId: entry.id })
+      // Linking an existing entry is approved in Kledg first (KLEDG-R3-MCP-10)
+      const link = async (transactionId: string) => {
+        const dry = await ok(key, 'reconcile_transaction', { companyId: ids.company, transactionId, entryId: entry.id })
+        expect(dry.dryRun).toBe(true)
+        await approve(dry.actionId)
+        return call(key, 'reconcile_transaction', { companyId: ids.company, transactionId, entryId: entry.id, actionId: dry.actionId })
+      }
+      expect((await link(first.id)).ok).toBe(true)
+      const again = await link(second.id)
       expect(again.ok).toBe(false)
       expect(again.text).toMatch(/déjà rapprochée avec une autre transaction/)
       expect((await prisma.bankTransaction.findUniqueOrThrow({ where: { id: second.id } })).reconciled).toBe(false)
@@ -502,9 +510,15 @@ describe.skipIf(!available)('MCP approvals and writes (round 3)', () => {
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
       expect(await prisma.bankTransaction.count({ where: { reconciledWith: other.id } })).toBe(1)
 
-      // Pointage without entry is not concerned.
+      // Pointage without entry also waits for the user's approval in validation mode
       const pointed = await bankTransaction('FRAIS', '1.00')
-      await ok(key, 'reconcile_transaction', { companyId: ids.company, transactionId: pointed.id, withoutEntry: true })
+      const dry = await ok(key, 'reconcile_transaction', { companyId: ids.company, transactionId: pointed.id, withoutEntry: true })
+      expect(dry.dryRun).toBe(true)
+      expect(dry.preview.effect).toMatch(/sans écriture/)
+      expect((await prisma.bankTransaction.findUniqueOrThrow({ where: { id: pointed.id } })).reconciled).toBe(false)
+      await approve(dry.actionId)
+      await ok(key, 'reconcile_transaction', { companyId: ids.company, transactionId: pointed.id, withoutEntry: true, actionId: dry.actionId })
+      expect((await prisma.bankTransaction.findUniqueOrThrow({ where: { id: pointed.id } })).reconciled).toBe(true)
     })
   })
 
