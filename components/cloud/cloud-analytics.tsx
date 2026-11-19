@@ -1,6 +1,7 @@
 'use client'
 
 import { Analytics, type BeforeSendEvent } from '@vercel/analytics/next'
+import { CloudEvents } from '@/components/cloud/cloud-events'
 
 /**
  * First path segments that are application pages, not a company: every
@@ -45,7 +46,14 @@ export function anonymizeAppUrl(url: string): string {
  * paths. The referrer the script reports cannot be rewritten here: every
  * response carries Referrer-Policy: strict-origin (lib/security-headers.ts),
  * so it is the origin only, never a company page (KLEDG-R3-CLOUD-03).
+ * CloudEvents adds the custom events (sign-up, company, bank, receipts,
+ * exports), with fixed values only.
  */
 export function CloudAnalytics() {
-  return <Analytics beforeSend={(event: BeforeSendEvent) => ({ ...event, url: anonymizeAppUrl(event.url) })} />
+  return (
+    <>
+      <Analytics beforeSend={(event: BeforeSendEvent) => ({ ...event, url: anonymizeAppUrl(event.url) })} />
+      <CloudEvents />
+    </>
+  )
 }
