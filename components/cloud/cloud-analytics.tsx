@@ -2,6 +2,7 @@
 
 import { Analytics, type BeforeSendEvent } from '@vercel/analytics/next'
 import { CloudEvents } from '@/components/cloud/cloud-events'
+import { EngagedEvent } from '@/components/cloud/engaged-event'
 
 /**
  * First path segments that are application pages, not a company: every
@@ -47,13 +48,15 @@ export function anonymizeAppUrl(url: string): string {
  * response carries Referrer-Policy: strict-origin (lib/security-headers.ts),
  * so it is the origin only, never a company page (KLEDG-R3-CLOUD-03).
  * CloudEvents adds the custom events (sign-up, company, bank, receipts,
- * exports), with fixed values only.
+ * exports), with fixed values only; EngagedEvent adds `engaged` {via}, the
+ * first real human input of a tab session (the input kind only).
  */
 export function CloudAnalytics() {
   return (
     <>
       <Analytics beforeSend={(event: BeforeSendEvent) => ({ ...event, url: anonymizeAppUrl(event.url) })} />
       <CloudEvents />
+      <EngagedEvent />
     </>
   )
 }
