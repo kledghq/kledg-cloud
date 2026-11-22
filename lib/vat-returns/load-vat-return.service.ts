@@ -15,6 +15,9 @@
  * then runs the pure modules: classify.ts, compute.ts, checks.ts.
  */
 
+import type { Prisma } from '@prisma/client'
+import { POSTABLE_TRANSACTION_WHERE } from '@/lib/banking/postable'
+import { pendingVatOf, pendingVatRoot } from '@/lib/invoices/vat-transfer'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { deductionModeOn, provisionalCoefficientOf } from '@/lib/vat-deduction/coefficient'
@@ -167,18 +170,117 @@ async function loadPeriodEntries(companyId: string, period: VatPeriod): Promise<
   }))
 }
 
+/** Paid invoices shown at most by the check. */
+const PAID_PENDING_SHOWN = 20
+
 /**
- * Debit minus credit of the VAT accounts (445) before the period, by code:
- * the validated entries of the fiscal year containing the period's first
- * day dated before it, and that year's opening entries (journal AN).
+ * Invoices whose tiers line is lettered (paid) while part of their VAT
+ * waiting for the payment never moved (#121, #120): 44574 to 44571 for a
+ * sale, 44588 to 44566 for a purchase. Lettered with a payment Kledg could
+ * not record (one payment for several invoices).
  */
-async function openingVatBalances(companyId: string, fiscalYearId: string | null, start: string): Promise<Map<string, number>> {
-  if (!fiscalYearId) return new Map()
+async function paidInvoicesWithPendingVat(companyId: string): Promise<string[]> {
+  const paidWith = (tiersRoot: string, pendingRoot: string) => ({
+    AND: [
+      { entry: { lines: { some: { account: { code: { startsWith: tiersRoot } }, letteringCode: { not: null } } } } },
+      { entry: { lines: { some: { account: { code: { startsWith: pendingRoot } } } } } },
+    ],
+  })
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      companyId,
+      OR: [
+        { direction: 'SALE', ...paidWith('41', pendingVatRoot('SALE')) },
+        { direction: 'PURCHASE', ...paidWith('40', pendingVatRoot('PURCHASE')) },
+      ],
+    },
+    select: {
+      number: true,
+      direction: true,
+      entry: { select: { lines: { select: { debit: true, credit: true, account: { select: { code: true } } } } } },
+      payments: { select: { vatTransferEntry: { select: { lines: { select: { debit: true, credit: true, account: { select: { code: true } } } } } } } },
+    },
+    orderBy: { issueDate: 'asc' },
+    take: 500,
+  })
+  return invoices
+    .filter((i) => {
+      const root = pendingVatRoot(i.direction)
+      const onRoot = (lines: Array<{ debit: Prisma.Decimal; credit: Prisma.Decimal; account: { code: string } }>) => lines.filter((l) => l.account.code.startsWith(root))
+      const waiting = pendingVatOf(i.direction, onRoot(i.entry?.lines ?? []))
+      const moved = i.payments.reduce((sum, p) => sum - pendingVatOf(i.direction, onRoot(p.vatTransferEntry?.lines ?? [])), 0)
+      return waiting - moved !== 0
+    })
+    .slice(0, PAID_PENDING_SHOWN)
+    .map((i) => i.number ?? 'sans numéro')
+}
+
+/** Fiscal years whose entries give the VAT balances before a period, as the context lists them. */
+interface OpeningFiscalYear {
+  id: string
+  startDate: string
+  isClosed: boolean
+}
+
+/**
+ * Debit minus credit of the VAT accounts (445) before the period, by code.
+ *
+ * - The fiscal year of the period's first day: its validated entries dated
+ *   before that day, and its opening entries (journal AN, whatever their
+ *   day: they may be dated on the first open day, PCG art. 1031-4).
+ * - The earlier fiscal years not closed yet, while the year has no opening
+ *   entry: their balances are not carried forward yet (#122). The credit of
+ *   a December CA3 is declared on line 22 of the January return, filed
+ *   weeks before the closing. The walk stops at a closed year or at a year
+ *   with its own opening entries, which already carry what came before.
+ * - The settlements of earlier periods dated after the period's start
+ *   (moved to the first open day of a closed period, their natural day in
+ *   the date of document, BOI-BIC-DECLA-30-10-20-40 § 140): returned apart,
+ *   since the period's own entries already contain them.
+ */
+async function openingVatBalances(
+  companyId: string,
+  fiscalYears: readonly OpeningFiscalYear[],
+  fiscalYearId: string | null,
+  start: string,
+  reference: string,
+): Promise<{ opening: Map<string, number>; movedSettlements: Map<string, number> }> {
+  if (!fiscalYearId) return { opening: new Map(), movedSettlements: new Map() }
+  const ordered = [...fiscalYears].sort((a, b) => a.startDate.localeCompare(b.startDate))
+  const hasOpeningEntry = async (id: string) =>
+    (await prisma.accountingEntry.count({ where: { companyId, fiscalYearId: id, status: 'validated', journal: { code: 'AN' } } })) > 0
+  const earlier: string[] = []
+  if (!(await hasOpeningEntry(fiscalYearId))) {
+    for (let i = ordered.findIndex((fy) => fy.id === fiscalYearId) - 1; i >= 0; i--) {
+      const fy = ordered[i]
+      if (fy.isClosed) break
+      earlier.push(fy.id)
+      if (await hasOpeningEntry(fy.id)) break
+    }
+  }
+  const [opening, moved] = await Promise.all([
+    vatBalancesWhere(companyId, {
+      OR: [
+        { fiscalYearId, OR: [{ date: { lt: utc(start) } }, { journal: { code: 'AN' } }] },
+        ...(earlier.length > 0 ? [{ fiscalYearId: { in: earlier } }] : []),
+      ],
+    }),
+    vatBalancesWhere(companyId, {
+      reference: { startsWith: SETTLEMENT_REFERENCE_PREFIX, not: reference },
+      date: { gte: utc(start) },
+      pieceDate: { lt: utc(start) },
+    }),
+  ])
+  return { opening, movedSettlements: moved }
+}
+
+/** Debit minus credit of the 445 accounts on the validated entries matching `where`, by code. */
+async function vatBalancesWhere(companyId: string, where: Prisma.AccountingEntryWhereInput): Promise<Map<string, number>> {
   const groups = await prisma.entryLine.groupBy({
     by: ['accountId'],
     where: {
-      account: { companyId, fiscalYearId, code: { startsWith: '445' } },
-      accountingEntry: { companyId, fiscalYearId, status: 'validated', OR: [{ date: { lt: utc(start) } }, { journal: { code: 'AN' } }] },
+      account: { companyId, code: { startsWith: '445' } },
+      accountingEntry: { companyId, status: 'validated', ...where },
     },
     _sum: { debit: true, credit: true },
   })
@@ -303,9 +405,9 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
   // NOT on a nullable column would leave out the drafts without a reference.
   const notSettlement = { OR: [{ reference: null }, { reference: { not: reference } }] }
 
-  const [entries, opening, drafts, draftCount, unreconciled, settlementEntry, filings] = await Promise.all([
+  const [entries, openingBalances, drafts, draftCount, unreconciled, settlementEntry, filings, rejectedPosted] = await Promise.all([
     loadPeriodEntries(companyId, period),
-    openingVatBalances(companyId, fiscalYear?.id ?? null, period.start),
+    openingVatBalances(companyId, context.fiscalYears, fiscalYear?.id ?? null, period.start, reference),
     prisma.accountingEntry.findMany({
       where: { companyId, status: 'draft', date: range, ...notSettlement },
       orderBy: [{ date: 'asc' }, { entryNumber: 'asc' }],
@@ -314,18 +416,26 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
     }),
     prisma.accountingEntry.count({ where: { companyId, status: 'draft', date: range, ...notSettlement } }),
     prisma.bankTransaction.aggregate({
-      where: { ...transactionOfCompany(companyId), reconciled: false, date: range, OR: [{ status: null }, { status: { not: 'declined' } }] },
+      // Pending, declined or reversed operations are never posted (lib/banking/postable.ts)
+      where: { ...transactionOfCompany(companyId), reconciled: false, date: range, ...POSTABLE_TRANSACTION_WHERE },
       _count: { _all: true },
       _sum: { amount: true },
     }),
     prisma.accountingEntry.findFirst({ where: { companyId, reference }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true, entryNumber: true } }),
     filingsOf(companyId, [...periods.map((p) => p.id), previousKey]),
+    prisma.bankTransaction.aggregate({
+      where: { ...transactionOfCompany(companyId), reconciled: true, reconciledWith: { not: null }, date: range, status: { in: ['declined', 'reversed'] } },
+      _count: { _all: true },
+      _sum: { amount: true },
+    }),
   ])
 
   const movements = classifyEntries(entries)
+  const { opening, movedSettlements } = openingBalances
+  // The credit of the previous return, with its settlement moved into this period (#122)
   const carriedCode = mainCode(opening, isCreditCarriedCode, '44567')
-  const creditCarriedCents = Math.max(sumWhere(opening, isCreditCarriedCode), 0)
-  const computation = computeVatReturn({ form: period.form, movements, creditCarriedCents })
+  const creditCarriedCents = Math.max(sumWhere(opening, isCreditCarriedCode) + sumWhere(movedSettlements, isCreditCarriedCode), 0)
+  const computation = computeVatReturn({ form: period.form, movements, creditCarriedCents, periodEnd: period.end })
 
   // Balances at the end of the period, without this period's settlement (classify left settlements out).
   const nets = periodNets(entries, reference)
@@ -351,6 +461,7 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
   const checks = vatChecks({
     drafts: { count: draftCount, numbers: drafts.map((d) => d.entryNumber) },
     unreconciled: { count: unreconciled._count._all, totalCents: Math.abs(cents(unreconciled._sum.amount)) },
+    rejectedPosted: { count: rejectedPosted._count._all, totalCents: Math.abs(cents(rejectedPosted._sum.amount)) },
     unidentified: movements.unidentified,
     unhandled: movements.unhandled,
     balances,
@@ -362,6 +473,8 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
     },
     credit: { carriedCents: creditCarriedCents, previousCreditCents: previousFiling?.creditCents ?? null },
     pendingCollectedCents: movements.pendingCollectedCents,
+    pendingDeductibleCents: movements.pendingDeductibleCents,
+    paidPendingInvoices: await paidInvoicesWithPendingVat(companyId),
   })
 
   const deadline = deadlines.find((d) => d.id === deadlineIdOfPeriod(period)) ?? null

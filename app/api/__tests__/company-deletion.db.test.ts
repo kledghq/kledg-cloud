@@ -26,6 +26,7 @@ const state = await vi.hoisted(async () => {
 vi.mock('@/lib/session', () => ({ getCurrentUser: async () => state.user }))
 
 import { prepareTestDatabase, testDatabaseAvailable } from '@/lib/__tests__/helpers/test-db'
+import { purgeCompaniesInTx } from '@/lib/companies/purge-companies'
 
 const available = await testDatabaseAvailable()
 
@@ -60,9 +61,19 @@ async function seedCompany(books: 'empty' | 'validated' | 'closed') {
   })
   if (books !== 'empty') {
     const journal = await prisma.journal.create({ data: { companyId: c.id, code: 'OD', label: 'Opérations diverses' } })
-    await prisma.accountingEntry.create({
-      data: { companyId: c.id, fiscalYearId: fy.id, journalId: journal.id, entryNumber: '1', date: new Date('2025-03-01T00:00:00Z'), description: 'Vente', status: 'validated' },
+    const bank = await prisma.account.create({ data: { companyId: c.id, fiscalYearId: fy.id, code: '512000', label: 'Banque' } })
+    const sales = await prisma.account.create({ data: { companyId: c.id, fiscalYearId: fy.id, code: '706000', label: 'Ventes' } })
+    // Created as a draft, then validated: the database refuses an entry inserted as validated (#161)
+    const entry = await prisma.accountingEntry.create({
+      data: { companyId: c.id, fiscalYearId: fy.id, journalId: journal.id, entryNumber: `BR-${n}`, date: new Date('2025-03-01T00:00:00Z'), description: 'Vente', status: 'draft' },
     })
+    await prisma.entryLine.createMany({
+      data: [
+        { accountingEntryId: entry.id, accountId: bank.id, accountFiscalYearId: fy.id, accountingEntryNumber: `BR-${n}`, debit: 10, credit: 0 },
+        { accountingEntryId: entry.id, accountId: sales.id, accountFiscalYearId: fy.id, accountingEntryNumber: `BR-${n}`, debit: 0, credit: 10 },
+      ],
+    })
+    await prisma.accountingEntry.update({ where: { id: entry.id }, data: { status: 'validated', entryNumber: '1' } })
   }
   if (books === 'closed') {
     await prisma.fiscalYear.update({ where: { id: fy.id }, data: { isClosed: true, closedAt: new Date() } })
@@ -111,14 +122,11 @@ describe.skipIf(!available)('company deletion and archiving', () => {
     await expect(prisma.company.delete({ where: { id } })).rejects.toThrow(/KLEDG_COMPANY_HAS_BOOKS/)
   })
 
-  it('lets a transaction that sets kledg.company_purge delete a company with books (throwaway companies of a fork), and only that transaction', async () => {
+  it('purges a company with books through kledg_purge_companies (throwaway companies of a fork), and only in that call', async () => {
     const kept = await seedCompany('validated')
-    const purged = await seedCompany('validated')
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('kledg.company_purge', 'on', true)`
-      await tx.$executeRaw`SELECT set_config('kledg.closed_year_bypass', 'on', true)`
-      await tx.company.delete({ where: { id: purged } })
-    })
+    const purged = await seedCompany('closed')
+    // The one path through the guards for the application (#161)
+    expect(await prisma.$transaction((tx) => purgeCompaniesInTx(tx, [purged]))).toBe(1)
     expect(await prisma.company.count({ where: { id: purged } })).toBe(0)
     // Transaction scoped: the next deletion is refused again.
     await expect(prisma.company.delete({ where: { id: kept } })).rejects.toThrow(/KLEDG_COMPANY_HAS_BOOKS/)

@@ -298,7 +298,11 @@ it must hold for every code path, by the database (trigger in a migration).
   degraded paths, `debug` for development traces (silent in production).
 - **Audit business operations** with `writeAuditLog` (`lib/audit`) from the
   route or service: action code, company, ids. Never log secrets, tokens,
-  full bank payloads or personal data beyond ids.
+  full bank payloads or personal data beyond ids. `writeAuditLog` runs
+  after the operation and swallows its errors; an accounting event that
+  must exist whenever the operation committed (closing, period lock, draft
+  deletion) is written with `writeAuditLogInTx` (`lib/audit/in-transaction.ts`)
+  in the operation's transaction.
 
 ## Security
 
@@ -350,6 +354,7 @@ it must hold for every code path, by the database (trigger in a migration).
   | What | Rule | Per |
   |---|---|---|
   | Sign-in, password reset, account creation, OAuth registration and tokens | `authRateLimit` (`lib/auth-policy.ts`) | client IP |
+  | Email sign-in, 20 attempts per 15 minutes (hook of `lib/auth.ts`) | `sign-in-email` | address |
   | API keys (MCP), 300 calls per minute | `mcp-api-key` (`lib/mcp/api-key.ts`: Better Auth verifies a key on first use and once a minute, so its row is not written on every call) | key |
   | First-run setup | `setup` | client IP |
   | Bank sync cron called without `CRON_SECRET` (the period-closing cron does not run without it) | `cron-keyless` | instance |

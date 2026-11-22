@@ -1,4 +1,5 @@
 // Import CSV
+import { importEntryDay, unreadableDayMessage } from './entry-day'
 import Papa from 'papaparse'
 import { prisma } from '@/lib/prisma'
 import { validateEntryBalance } from '@/lib/accounting/validator'
@@ -6,7 +7,7 @@ import { createAccountingEntryWithWarnings } from '@/lib/accounting/services'
 import type { EntryLine } from '@/lib/accounting/types'
 import type { PCGWarning } from '@/lib/accounting/services'
 import { handleError, ValidationError } from '@/lib/accounting/errors'
-import { fromCents } from '@/lib/utils/money'
+import { fromCents, unsignedSides } from '@/lib/utils/money'
 import { importAmountCents } from './amount'
 import { assertCsvWithinLimits } from '@/lib/api/files'
 import { ACCOUNTING_IMPORT_MAX_ROWS } from './excel'
@@ -143,7 +144,7 @@ export async function importCSV(
     const existingEntries = await loadExistingEntries(
       companyId,
       [...new Set(journalsMap.values())],
-      [...entriesMap.values()].map((lines) => new Date(lines[0][defaultMapping.dateColumn])),
+      [...entriesMap.values()].map((lines) => importEntryDay(lines[0][defaultMapping.dateColumn])).filter((d): d is Date => d !== null),
     )
     for (const [key, lines] of entriesMap.entries()) {
       try {
@@ -157,14 +158,22 @@ export async function importCSV(
         }
 
         const entryNumber = String(firstLine[defaultMapping.entryNumberColumn] || '')
-        const entryDate = new Date(firstLine[defaultMapping.dateColumn])
+        const entryDate = importEntryDay(firstLine[defaultMapping.dateColumn])
+        if (!entryDate) {
+          result.errors.push(unreadableDayMessage(key, firstLine[defaultMapping.dateColumn]))
+          continue
+        }
 
 
         // CSV lines to EntryLine, amounts read exactly (French notation accepted)
-        const amounts = lines.map((l) => ({
-          debit: importAmountCents(l[defaultMapping.debitColumn]),
-          credit: importAmountCents(l[defaultMapping.creditColumn]),
-        }))
+        const amounts = lines.map((l) => {
+          const debit = importAmountCents(l[defaultMapping.debitColumn])
+          const credit = importAmountCents(l[defaultMapping.creditColumn])
+          if (debit === null || credit === null) return { debit, credit }
+          // A negative amount moves to the other side (#146)
+          const sides = unsignedSides(debit, credit)
+          return { debit: sides.debitCents, credit: sides.creditCents }
+        })
         if (amounts.some((a) => a.debit === null || a.credit === null)) {
           result.errors.push(`Écriture ${entryNumber}: montant invalide (exemple : 1 234,56)`)
           continue
