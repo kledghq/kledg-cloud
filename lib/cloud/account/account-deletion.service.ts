@@ -42,6 +42,7 @@ import { logger } from '@/lib/logger'
 import { writeAuditLog } from '@/lib/audit'
 import { enforceRateLimit } from '@/lib/rate-limit'
 import { ConflictError, ValidationError } from '@/lib/accounting/errors'
+import { purgeCompaniesInTx } from '@/lib/companies/purge-companies'
 import { companyHasBooks } from '@/lib/companies/archive-company.service'
 import { checkAccountDeletion } from '@/lib/account/deletion-guards'
 import type { CurrentUser } from '@/lib/session'
@@ -195,13 +196,12 @@ export interface PurgeOutcome {
 export async function purgeCompanies(companyIds: string[]): Promise<PurgeOutcome> {
   if (companyIds.length === 0) return { deletedReceiptObjects: 0, pendingReceiptObjects: 0 }
   const pending = await prisma.$transaction(async (tx) => {
-    // The transaction-scoped bypasses Kledg provides for intended deletions
-    // of closed years and companies with books (migrations 20261004090000
-    // and 20261013090000).
-    await tx.$queryRaw`SELECT set_config('kledg.closed_year_bypass', 'on', true), set_config('kledg.company_purge', 'on', true)`
     await tx.$executeRaw`SET CONSTRAINTS ALL DEFERRED`
     const objects = await recordCompanyObjects(tx, companyIds)
-    await tx.company.deleteMany({ where: { id: { in: companyIds } } })
+    // Kledg's purge function: the one path through the guards that keep closed
+    // years and companies with books (kledghq/kledg#161). The transaction
+    // settings no longer open them to the application role (KLEDG_RLS=enforce).
+    await purgeCompaniesInTx(tx, companyIds)
     await tx.address.deleteMany({ where: { companyId: { in: companyIds } } })
     return objects
   })
