@@ -15,6 +15,7 @@
  * the same entries, numbers and balances (round trip, see the tests).
  */
 
+import { CLOSING_JOURNAL } from '@/lib/accounting/fiscal-year-closure/constants'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { logger } from '@/lib/logger'
@@ -33,7 +34,7 @@ import type { BankEntryToMatch } from '@/lib/reconciliation/bank-line-match'
 import type { FECImportOptions, FiscalYearInfo, ImportResult } from '@/lib/import/fec/types'
 import { plural } from '@/lib/utils/plural'
 import { groupRefusals } from '@/lib/import/fec/refusal-report'
-import { assertNoFiscalYearOverlap, lockCompanyFiscalYears } from '@/lib/accounting/manage-fiscal-years.service'
+import { assertFiscalYearDuration, assertNoFiscalYearOverlap, lockCompanyFiscalYears } from '@/lib/accounting/manage-fiscal-years.service'
 
 // Re-export public types
 export type { FECLine, ImportResult, FECImportOptions, FiscalYearInfo } from '@/lib/import/fec/types'
@@ -203,6 +204,20 @@ export async function importFEC(options: FECImportOptions): Promise<ImportResult
       result.errors.push("Correspondance de journaux invalide : un journal choisi n'appartient pas à cette société.")
     }
 
+    // CL is reserved to the closing entry Kledg writes (#124): a journal of the file named CL goes elsewhere
+    const closingJournalIds = new Set(
+      (await prisma.journal.findMany({ where: { companyId, code: CLOSING_JOURNAL.code }, select: { id: true } })).map((j) => j.id),
+    )
+    const toClosing = [...plan.journals.keys()].filter((code) => {
+      const mapped = journalMapping[code]
+      return mapped ? closingJournalIds.has(mapped) : code.trim().toUpperCase() === CLOSING_JOURNAL.code
+    })
+    if (toClosing.length > 0) {
+      result.errors.push(
+        `Le journal ${CLOSING_JOURNAL.code} est réservé à l'écriture de clôture que Kledg passe à la clôture de l'exercice\u00a0: faites correspondre le journal ${toClosing.join(', ')} du fichier à un autre journal. Les écritures de solde des comptes de charges et de produits n'ont pas leur place dans un FEC (LPF art. A47 A-1).`,
+      )
+    }
+
     if (refusedCount > 0) {
       result.errors.push(
         `${plural(refusedCount, 'écriture refusée', 'écritures refusées')} : aucune écriture n'a été importée. Corrigez le fichier puis relancez l'import.`,
@@ -277,6 +292,7 @@ async function writePlan(db: Prisma.TransactionClient, companyId: string, plan: 
       fiscalYearIds.set(fy.year, fy.id)
       continue
     }
+    assertFiscalYearDuration(fy.start, fy.end)
     await assertNoFiscalYearOverlap(db, companyId, { start: dayToDate(fy.start), end: dayToDate(fy.end) })
     const row = await db.fiscalYear.create({
       data: {

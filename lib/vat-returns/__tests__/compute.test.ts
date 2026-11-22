@@ -403,7 +403,15 @@ describe('CA12 with acomptes and the annual regularisation (notice 3517-S-SD, li
 
   it('gives next year acomptes from line 57: 55 % in July, 40 % in December', () => {
     expect(line(ca12, '57').amount).toBe(12_000)
-    expect(ca12.acomptes).toEqual({ paidCents: 500_000, nextBaseEuros: 12_000, nextDue: true, nextJulyEuros: 6_600, nextDecemberEuros: 4_800 })
+    expect(ca12.acomptes).toEqual({ paidCents: 500_000, nextBaseEuros: 12_000, nextDue: true, regimeEnds: false, nextJulyEuros: 6_600, nextDecemberEuros: 4_800 })
+  })
+
+  it('announces no acompte after the last CA12, of 2026 (loi n° 2025-127, art. 38, #142)', () => {
+    const movements = classifyEntries(year)
+    const last = computeVatReturn({ form: 'CA12', movements, creditCarriedCents: 0, periodEnd: '2026-12-31' })
+    expect(line(last, '57').amount).toBe(12_000)
+    expect(last.acomptes).toMatchObject({ nextBaseEuros: 12_000, nextDue: false, regimeEnds: true, nextJulyEuros: 0, nextDecemberEuros: 0 })
+    expect(computeVatReturn({ form: 'CA12', movements, creditCarriedCents: 0, periodEnd: '2025-12-31' }).acomptes).toMatchObject({ nextDue: true, regimeEnds: false, nextJulyEuros: 6_600 })
   })
 
   it('turns acomptes above the VAT of the year into an overpayment (34) and a surplus (35)', () => {
@@ -460,5 +468,43 @@ describe('rounding to the euro (notices: 0,50 € and more count for one)', () =
     const ca3 = computeVatReturn({ form: 'CA3', movements: classifyEntries([sale(10_040, 2_008), sale(10_040, 1_004)]), creditCarriedCents: 0 })
     expect(line(ca3, '16').amount).toBe(30)
     expect(ca3.result).toMatchObject({ dueEuros: 30, booksNetCents: 3_012 })
+  })
+})
+
+// #143: imports self-assessed on 44527 (CGI art. 1695, II). Notice
+// 3310-CA3-SD 2026: A4 (box 0056) the base, I1 to I6 (0210 to 0215) the tax
+// by rate, 24 (0710) the VAT deducted on imports. The CA12 has none (a
+// company that imports files under the réel normal).
+describe('imports (CA3 A4, I1 to I6, 24)', () => {
+  // Goods imported from outside the EU, 10 000 € at 20 %, VAT self-assessed and deducted
+  const imported = entry([['607000', 1_000_000, 0], ['445660', 200_000, 0], ['445270', 0, 200_000], ['401000', 0, 1_000_000]])
+
+  it('declares the base on A4, the tax on I1 and the deduction on line 24 and 20', () => {
+    const m = classifyEntries([sale(2_000_000, 400_000), imported])
+    expect(m.autoliquidationImports).toEqual([{ rateBp: 2000, baseCents: 1_000_000, vatCents: 200_000 }])
+    expect(m.unidentified).toEqual([])
+    const ca3 = computeVatReturn({ form: 'CA3', movements: m, creditCarriedCents: 0 })
+    expect(line(ca3, 'A4')).toMatchObject({ box: '0056', base: 10_000 })
+    expect(line(ca3, 'I1')).toMatchObject({ box: '0210', base: 10_000, amount: 2_000 })
+    expect(line(ca3, 'B2').base).toBe(0)
+    expect(line(ca3, 'A3').base).toBe(0)
+    expect(line(ca3, '08')).toMatchObject({ base: 20_000, amount: 4_000 })
+    expect(line(ca3, '16').amount).toBe(6_000)
+    expect(line(ca3, '17').amount).toBe(0)
+    expect(line(ca3, '20').amount).toBe(2_000)
+    expect(line(ca3, '24')).toMatchObject({ box: '0710', amount: 2_000 })
+    expect(ca3.result).toMatchObject({ kind: 'due', dueEuros: 4_000 })
+  })
+
+  it('leaves an import without a base in the entry unidentified, and every import on a CA12', () => {
+    const alone = entry([['445660', 200_000, 0], ['445270', 0, 200_000]])
+    const m = classifyEntries([alone])
+    expect(m.autoliquidationImports).toEqual([])
+    expect(m.unidentified).toMatchObject([{ vatCents: 200_000, kind: 'autoliquidation' }])
+    expect(line(computeVatReturn({ form: 'CA3', movements: m, creditCarriedCents: 0 }), '24').amount).toBe(2_000)
+
+    const ca12 = computeVatReturn({ form: 'CA12', movements: classifyEntries([imported]), creditCarriedCents: 0 })
+    expect(line(ca12, '?')).toMatchObject({ base: 10_000, amount: 2_000 })
+    expect(line(ca12, '16').amount).toBe(2_000)
   })
 })

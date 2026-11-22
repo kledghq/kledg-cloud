@@ -18,7 +18,8 @@ import {
   OpeningEntryImbalanceError,
   PROFIT_ACCOUNT,
 } from './closing-entries'
-import { loadYearBalances, nextFiscalYearDates } from './ledger'
+import { findNextFiscalYear, loadYearBalances, nextFiscalYearDates } from './ledger'
+import { loadRecordedOpening } from './recorded-opening'
 
 export interface ClosureSimulation {
   nextFiscalYear: { year: number; startDate: Date; endDate: Date; exists: boolean }
@@ -70,12 +71,14 @@ export async function simulateFiscalYearClosure(
     throw error
   }
 
-  const existingNext = await prisma.fiscalYear.findFirst({
-    where: { companyId, year: fiscalYear.year + 1 },
-  })
+  const existingNext = await findNextFiscalYear(prisma, companyId, fiscalYear.endDate, { id: true, year: true, startDate: true, endDate: true })
   const dates = existingNext
     ? { startDate: existingNext.startDate, endDate: existingNext.endDate }
     : nextFiscalYearDates(fiscalYear.endDate)
+
+  // Validated à-nouveaux already in the next year are kept (recorded-opening.ts): no new opening entry.
+  const recorded = existingNext ? await loadRecordedOpening(prisma, companyId, existingNext.id) : null
+  if (recorded) opening = []
 
   const [current, nextAccounts] = await Promise.all([
     prisma.account.findMany({
@@ -99,7 +102,7 @@ export async function simulateFiscalYearClosure(
     ...(blocked ?? { success: true }),
     warnings: validation.warnings,
     simulation: {
-      nextFiscalYear: { year: fiscalYear.year + 1, ...dates, exists: !!existingNext },
+      nextFiscalYear: { year: existingNext?.year ?? fiscalYear.year + 1, ...dates, exists: !!existingNext },
       accountsToCreate: toCreate.length,
       accountsPreview: toCreate.slice(0, 20),
       closingEntries: {

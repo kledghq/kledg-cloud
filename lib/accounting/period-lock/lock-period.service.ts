@@ -23,13 +23,14 @@
  *   (assertEntryWritableInFiscalYear, lib/accounting/entry-guards.ts).
  */
 
+import { sealFiscalYearInTx } from '@/lib/accounting/integrity/ledger-integrity.service'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ConflictError, NotFoundError, ValidationError } from '@/lib/accounting/errors'
 import { calendarDay } from '@/lib/api/zod-fields'
 import { dayToDate } from '@/lib/accounting/entry-date'
 import { lockFiscalYearRow } from '@/lib/accounting/fiscal-year-closure/lock'
-import { writeAuditLog } from '@/lib/audit'
+import { writeAuditLogInTx } from '@/lib/audit/in-transaction'
 import { addIsoDays, calendarDayOf, formatIsoDateFr } from '@/lib/utils/date'
 
 /** Body of POST /api/companies/[id]/fiscal-years/[fiscalYearId]/period-lock. */
@@ -49,7 +50,7 @@ export interface PeriodLock {
 
 /** Closes the periods of a fiscal year up to `through` (included). */
 export async function lockPeriod(companyId: string, fiscalYearId: string, through: string, userId: string): Promise<PeriodLock> {
-  const result = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     // Same row lock as the closing and the depreciation postings of the year: lock, then read.
     const locked = await lockFiscalYearRow(tx, fiscalYearId, companyId)
     const fiscalYear = locked
@@ -86,13 +87,15 @@ export async function lockPeriod(companyId: string, fiscalYearId: string, throug
       where: { id: fiscalYear.id },
       data: { periodLockedThrough: dayToDate(through), periodLockedAt: new Date(), periodLockedById: userId },
     })
-    return { year: fiscalYear.year, previous: current }
+    // The validated entries as the closed period leaves them (#147)
+    await sealFiscalYearInTx(tx, { companyId, fiscalYearId: fiscalYear.id, reason: 'period_lock', throughDay: dayToDate(through), userId })
+    // In the transaction: the lock and its audit row commit together (#161)
+    await writeAuditLogInTx(tx, 'info', `Period closed through ${through}`, {
+      action: 'PERIOD_LOCKED',
+      companyId,
+      metadata: { fiscalYearId, through, previous: current },
+    })
   })
 
-  await writeAuditLog('info', `Period closed through ${through}`, {
-    action: 'PERIOD_LOCKED',
-    companyId,
-    metadata: { fiscalYearId, through, previous: result.previous },
-  })
   return { fiscalYearId, periodLockedThrough: through, firstOpenDay: addIsoDays(through, 1) }
 }

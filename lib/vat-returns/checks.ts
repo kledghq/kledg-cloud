@@ -26,7 +26,7 @@ import type { UnhandledAccount, UnidentifiedEntry } from './classify'
 export type CheckSeverity = 'blocking' | 'warning' | 'info' | 'ok'
 
 export interface VatCheck {
-  id: 'drafts' | 'bank' | 'rates' | 'accounts' | 'balances' | 'to-pay' | 'credit' | 'pending'
+  id: 'drafts' | 'bank' | 'rates' | 'accounts' | 'balances' | 'to-pay' | 'credit' | 'pending' | 'rejected' | 'paid-pending' | 'pending-deductible'
   severity: CheckSeverity
   title: string
   detail: string
@@ -49,6 +49,8 @@ export interface BalanceRow {
 export interface CheckInput {
   drafts: { count: number; numbers: string[] }
   unreconciled: { count: number; totalCents: number }
+  /** Posted bank operations of the period the bank then declined or reversed (#118). */
+  rejectedPosted?: { count: number; totalCents: number }
   unidentified: UnidentifiedEntry[]
   unhandled: UnhandledAccount[]
   balances: BalanceRow[]
@@ -64,6 +66,10 @@ export interface CheckInput {
   }
   credit: { carriedCents: number; previousCreditCents: number | null }
   pendingCollectedCents: number
+  /** VAT of purchased services debited to 44588 in the period, deductible once paid (#120). */
+  pendingDeductibleCents?: number
+  /** Numbers of sales paid (lettered) whose VAT due on receipt still waits in 44574 (#121). */
+  paidPendingInvoices?: string[]
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`
@@ -157,6 +163,38 @@ export function vatChecks(input: CheckInput): VatCheck[] {
       title: 'Le crédit reporté diffère de la déclaration précédente',
       detail: 'Le crédit à reporter doit reprendre celui de la déclaration précédente (ligne 27 de la CA3, ligne 51 de la CA12). Kledg lit le solde du compte 44567 au début de la période.',
       items: [`Solde du compte 44567 : ${euros(input.credit.carriedCents)}`, `Crédit de la déclaration précédente : ${euros(input.credit.previousCreditCents)}`],
+    })
+  }
+
+  if (input.rejectedPosted && input.rejectedPosted.count > 0) {
+    checks.push({
+      id: 'rejected',
+      severity: 'warning',
+      title: `${plural(input.rejectedPosted.count, 'opération comptabilisée', 'opérations comptabilisées')} puis ${input.rejectedPosted.count > 1 ? 'refusées ou annulées' : 'refusée ou annulée'} par la banque`,
+      detail: `Pour ${euros(input.rejectedPosted.totalCents)}\u00a0: aucun argent n'a bougé, mais leur écriture (et sa TVA) est restée. Contre-passez-la ou supprimez le brouillon.`,
+      link: { label: 'Voir les transactions', page: 'transactions' },
+    })
+  }
+
+  if (input.paidPendingInvoices && input.paidPendingInvoices.length > 0) {
+    const count = input.paidPendingInvoices.length
+    checks.push({
+      id: 'paid-pending',
+      severity: 'warning',
+      title: `${plural(count, 'facture payée', 'factures payées')} dont la TVA attend encore le paiement`,
+      detail:
+        "Ces factures de prestations sont lettrées avec leur règlement, mais leur TVA est restée en attente (44574 pour une vente, 44588 pour un achat)\u00a0: elle n'est déclarée ou déduite sur aucune période (CGI art. 269, 2, c et 271, I-2). Délettrez la facture et enregistrez son règlement depuis la facture, ou passez vous-même l'écriture vers 44571 ou 44566 à la date du paiement.",
+      link: { label: 'Voir les factures', page: 'invoices' },
+      items: input.paidPendingInvoices,
+    })
+  }
+
+  if (input.pendingDeductibleCents && input.pendingDeductibleCents > 0) {
+    checks.push({
+      id: 'pending-deductible',
+      severity: 'info',
+      title: 'TVA déductible en attente de paiement',
+      detail: `${euros(input.pendingDeductibleCents)} de TVA sur des prestations achetées attendent leur paiement (compte 44588)\u00a0: elle sera déduite sur la période où vous paierez vos fournisseurs (CGI art. 271, I-2), sauf pour un fournisseur qui a opté pour les débits.`,
     })
   }
 

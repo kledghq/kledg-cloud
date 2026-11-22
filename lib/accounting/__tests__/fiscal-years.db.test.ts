@@ -307,12 +307,14 @@ describe.skipIf(!available)('fiscal years (PostgreSQL)', () => {
       expect(await validateFiscalYearClosure(s.companyId, s.fy2025, prisma, now)).toEqual({ canClose: false, errors: ['Cet exercice est déjà clôturé'], warnings: [] })
     })
 
-    it('blocks a closing journal entry already in the year, and opening entries in the next year', async () => {
+    it('blocks a closing journal entry already in the year, and validated opening entries of the next year that differ from the closing balances', async () => {
       const s = await setup()
       const fy2026 = await fiscalYear(s.companyId, 2026, '2026-01-01', '2026-12-31')
       const cl = await prisma.journal.create({ data: { companyId: s.companyId, code: 'CL', label: 'Clôture' } })
       const an = await prisma.journal.create({ data: { companyId: s.companyId, code: 'AN', label: 'À-nouveaux' } })
-      await entry(s.companyId, cl.id, '2025-12-31', await s.account('120000'), await s.account('706000'), '10.00', 'draft')
+      // An entry left in CL before the journal was reserved to the closing (#124)
+      const legacy = await entry(s.companyId, s.journal, '2025-12-31', await s.account('120000'), await s.account('706000'), '10.00', 'draft')
+      await prisma.accountingEntry.update({ where: { id: legacy.id }, data: { journalId: cl.id } })
       await entry(s.companyId, an.id, '2026-01-01', await s.account('512000', fy2026), await s.account('110000', fy2026), '10.00')
 
       const result = await validateFiscalYearClosure(s.companyId, s.fy2025, prisma, now)
@@ -321,7 +323,7 @@ describe.skipIf(!available)('fiscal years (PostgreSQL)', () => {
       expect(result.errors).toEqual([
         '1 écriture en brouillon doit être validée ou supprimée avant la clôture.',
         "L'exercice contient déjà 1 écriture du journal de clôture (CL) : supprimez-la avant de clôturer.",
-        "L'exercice 2026 contient déjà 1 écriture d'à-nouveaux (journal AN) : supprimez-la pour que la clôture reporte les soldes.",
+        "L'exercice 2026 a déjà des à-nouveaux validés (journal AN) qui ne reprennent pas les soldes de clôture de 2025 (Code de commerce art. L123-19) : comptes 11 et 12 : 0,00 € attendu, 10,00 € créditeur enregistré ; compte 512000 : 0,00 € attendu, 10,00 € débiteur enregistré. Corrigez les écritures de 2025, ou passez une écriture complémentaire au journal AN de 2026.",
       ])
     })
 
