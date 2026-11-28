@@ -578,6 +578,7 @@ enum BankingProvider {
   QONTO // Direct API (API key)
   REVOLUT // Revolut Business direct API (OAuth, certificate)
   PONTO // Ponto aggregator (custom integration, other banks)
+  STRIPE // Stripe balance (restricted API key, read only)
   MANUAL // No API: statements imported from files
 }
 
@@ -598,6 +599,7 @@ enum IntegrationProvider {
   GOOGLE_DRIVE
   DROPBOX
   PONTO
+  STRIPE
 }
 
 enum IntegrationFeature {
