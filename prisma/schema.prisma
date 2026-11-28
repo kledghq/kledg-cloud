@@ -592,6 +592,7 @@ enum IntegrationType {
   ACCOUNTING // Sage, Cegid, etc.
   CRM // Salesforce, HubSpot, etc.
   ECOMMERCE // Shopify, WooCommerce, etc.
+  RECEIPTS // Boîte e-mail relevée pour les justificatifs (IMAP, lib/receipts/mailbox)
 }
 
 enum IntegrationProvider {
@@ -604,6 +605,7 @@ enum IntegrationProvider {
   DROPBOX
   PONTO
   STRIPE
+  IMAP
 }
 
 enum IntegrationFeature {
